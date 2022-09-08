@@ -1,0 +1,109 @@
+from typing import Any, NamedTuple
+
+import jax
+import jax.numpy as jnp
+import optax
+import reverb
+import chex
+
+from rltools.loggers import TFSummaryLogger
+from .networks import Networks
+from .config import Config
+
+
+class LearnerState(NamedTuple):
+    params: Any
+    optim_state: Any
+
+
+class Learner:
+    def __init__(self,
+                 rng_key: jax.random.PRNGKey,
+                 config: Config,
+                 networks: Networks,
+                 optim: optax.GradientTransformation,
+                 dataset,
+                 client: reverb.Client
+                 ):
+        params = networks.init(rng_key)
+        optim_state = optim.init(params)
+        self._state = LearnerState(params, optim_state)
+        self._config = config
+        self._ds = dataset
+        self._client = client
+        self.gradient_steps = 0
+        self._callback = TFSummaryLogger('logdir', 'train', step_key='step')
+
+        @chex.assert_max_traces(n=3)
+        def _step(state, data):
+            params, optim_state = state
+            states, actions, scores = map(
+                data.get,
+                ("states", "actions", "scores")
+            )
+            
+            def policy_loss(actor_params, states, actions, advantages):
+                logits = networks.actor(actor_params, states)
+                dist = networks.make_dist(logits)
+                log_prob = dist.log_prob(actions)
+
+                entropy = dist.entropy()
+
+                cross_entropy = -jnp.mean(log_prob)
+                reinforce_loss = -jnp.mean(advantages * log_prob)
+                loss = cross_entropy + config.reinforce_conf*reinforce_loss
+
+                metrics = dict(
+                    ce_loss=cross_entropy,
+                    reinforce_loss=reinforce_loss,
+                    entropy=jnp.mean(entropy)
+                )
+
+                return loss, metrics
+            
+            def value_loss(critic_params, states, scores):
+                values = networks.critic(critic_params, states)
+                chex.assert_equal_shape([values, scores])
+                loss = jnp.square(values - scores)
+                return jnp.mean(loss), values
+
+            def loss(params, states, actions, scores):
+                critic_loss, values = value_loss(params, states, scores)
+                adv = scores - values
+                actor_loss, metrics = policy_loss(params, states, actions, adv)
+                loss = actor_loss + config.critic_loss_coef * critic_loss
+
+                r2 = critic_loss/jnp.var(scores)
+                chex.assert_rank(r2, 0)
+                metrics.update(
+                    dict(
+                        critic_loss=critic_loss,
+                        mean_value=jnp.mean(values),
+                        r2=r2,
+                        mean_score=jnp.mean(scores)
+                    )
+                )
+                return loss, metrics
+
+            grads, metrics = jax.grad(loss, has_aux=True)(params, states, actions, scores)
+
+            update, optim_state = optim.update(grads, optim_state)
+
+            params = optax.apply_updates(params, update)
+
+            return LearnerState(params, optim_state), metrics
+
+        # self._step = jax.jit(_step)
+        self._step = _step
+
+    def run(self):
+        while True:
+            sample = next(self._ds)
+            info, data = sample
+            data = jax.device_put(data)
+            self._state, metrics = self._step(self._state, data)
+            self.gradient_steps += 1
+            metrics["step"] = self.gradient_steps
+            self._callback.write(metrics)
+            self._client.insert(self._state.params, priorities={"weights": 1.})
+

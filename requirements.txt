@@ -1,0 +1,6 @@
+numpy
+jax
+dm_haiku
+optax
+dm-reverb
+rltools
