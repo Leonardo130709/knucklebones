@@ -3,4 +3,4 @@ jax
 dm_haiku
 optax
 dm-reverb
-rltools
+https://github.com/Leonardo130709/rltools.git

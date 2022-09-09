@@ -4,13 +4,15 @@ import jax
 import jax.numpy as jnp
 import haiku as hk
 import tensorflow_probability.substrates.jax as tfp
-tfd = tfp.distributions
 
 from .config import Config
 from src.consts import COLUMNS
 from src.game import GameState
+from src.consts import MAX_BOARD_SCORE
 
-MIN_LOGIT = -1e9
+tfd = tfp.distributions
+MAX_BOARD_SCORE = float(MAX_BOARD_SCORE)
+MIN_LOGIT = -1e6
 
 
 def ln_factory():
@@ -63,7 +65,7 @@ class TransformerLayer(hk.Module):
             2 * [self._hidden_dim],
             w_init=hk.initializers.VarianceScaling(),
             b_init=jnp.zeros,
-            activation=_ACTIVATION[self._activation]
+            activation=_ACTIVATION[self._activation],
         )(x)
 
 
@@ -211,8 +213,8 @@ def make_networks(cfg: Config):
             return state._replace(
                 player_board=encoder(state.player_board),
                 opponent_board=encoder(state.opponent_board),
-                player_col_scores=state.player_col_scores / 162.,
-                opponent_col_scores=state.opponent_col_scores / 162.
+                player_col_scores=state.player_col_scores / MAX_BOARD_SCORE,
+                opponent_col_scores=state.opponent_col_scores / MAX_BOARD_SCORE
             )
 
         def actor_fn(state: GameState):
@@ -220,8 +222,8 @@ def make_networks(cfg: Config):
             return actor(state)
 
         def value_fn(state: GameState):
-            state = encoder_fn(state)
-            v = critic(state.player_board)
+            state = encoder(state.player_board)
+            v = critic(state)
             return jnp.squeeze(v, axis=-1)
 
         return init, (encoder_fn, actor_fn, value_fn)

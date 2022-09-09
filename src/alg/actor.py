@@ -5,12 +5,13 @@ import haiku as hk
 import reverb
 import chex
 
-from rltools.loggers import TFSummaryLogger
+from rltools.loggers import TFSummaryLogger, TerminalOutput
 
 from .networks import Networks
 from .config import Config
 from src.game import GameState, Knucklebones
 from src.agents import RandomAgent
+from src.consts import MAX_BOARD_SCORE
 
 CPU = jax.devices("cpu")[0]
 
@@ -35,6 +36,7 @@ class Actor:
             max_in_flight_samples_per_worker=2
         ).as_numpy_iterator()
         self._callback = TFSummaryLogger('logdir', 'eval', step_key='step')
+        self._printer = TerminalOutput()
 
         @chex.assert_max_traces(n=2)
         def _act(params,
@@ -45,12 +47,11 @@ class Actor:
             if training:
                 k1, k2, k3 = jax.random.split(rng, 3)
                 dist = networks.make_dist(logits)
-                action = dist.sample(seed=k1)
                 mask = state.action_mask
                 action = jax.lax.select(
-                    jax.random.uniform(k2) < self._config.epsilon,
-                    jax.random.choice(k3, mask.shape[0], (), p=mask),
-                    action
+                    jax.random.uniform(k1) < self._config.epsilon,
+                    jax.random.choice(k2, mask.shape[0], (), p=mask),
+                    dist.sample(seed=k3)
                 )
             else:
                 action = jnp.argmax(logits, axis=-1)
@@ -100,6 +101,7 @@ class Actor:
             mean_length=np.mean(w_self_summaries["length"])
         )
         self._callback.write(summaries)
+        self._printer.write(summaries)
 
     def run(self):
         writer = self._client.trajectory_writer(num_keep_alive_refs=1)
@@ -112,11 +114,18 @@ class Actor:
                 ("winner_states", "winner_actions", "length", "winner_score")
             )
             self.interactions_count += steps
-            for state, action in zip(states, actions):
+
+            discounts = self._config.discount ** \
+                        np.arange(len(actions) - 1, -1, -1)
+            discounts = discounts.astype(np.float32)
+            score = np.asarray(score / MAX_BOARD_SCORE, dtype=np.float32)
+
+            for state, action, discount in zip(states, actions, discounts):
                 writer.append({
                     "states": state,
                     "actions": action,
-                    "scores": np.array(score / 162., dtype=np.float32),
+                    "scores": score,
+                    "discounts": discount
                 })
                 writer.create_item(
                     table="replay_buffer",

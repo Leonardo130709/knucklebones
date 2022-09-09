@@ -26,9 +26,13 @@ class RandomAgent(Agent):
 
 class ManualControl(Agent):
     def __call__(self, state):
-        print(state.player_board)
-        print(state.opponent_board)
-        print(state.dice)
+        _am = lambda x: np.argmax(x, axis=-1)
+        print("Opp_board:")
+        print(_am(state.opponent_board).T)
+        print("Player board:")
+        print(_am(state.player_board).T)
+        print("Dice:")
+        print(_am(state.dice))
         return int(input())
 
 

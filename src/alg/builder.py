@@ -15,12 +15,15 @@ from src.game import GameState
 class Builder:
     def __init__(self, config: Config):
         self.cfg = config
+        rng = jax.random.PRNGKey(self.cfg.seed)
+        self.actor_rng, self.learner_rng = jax.random.split(rng)
 
-    def make_actor(self, rng_key, client):
+    def make_actor(self):
         networks = make_networks(self.cfg)
-        return Actor(rng_key, self.cfg, networks, client)
+        client = reverb.Client(f'localhost:{self.cfg.port}')
+        return Actor(self.actor_rng, self.cfg, networks, client)
 
-    def make_tables(self):
+    def make_server(self):
         networks = make_networks(self.cfg)
         to_specs = lambda ar: tf.TensorSpec(ar.shape, dtype=ar.dtype)
 
@@ -29,7 +32,8 @@ class Builder:
             {
                 "states": GameState.zeroes(),
                 "actions": jnp.array(0, dtype=jnp.int32),
-                "scores": jnp.array(0, dtype=jnp.float32)
+                "scores": jnp.array(0, dtype=jnp.float32),
+                "discounts": jnp.array(0, dtype=jnp.float32)
              }
         )
         params = networks.init(jax.random.PRNGKey(0))
@@ -37,7 +41,7 @@ class Builder:
             to_specs,
             params
         )
-        return [
+        tables = [
             reverb.Table(
                 name="weights",
                 sampler=reverb.selectors.Lifo(),
@@ -57,6 +61,7 @@ class Builder:
                 signature=trajectory_signature
             )
         ]
+        return reverb.Server(tables, self.cfg.port)
 
     def make_dataset_iterator(self):
         ds = reverb.TrajectoryDataset.from_table_signature(
@@ -67,12 +72,10 @@ class Builder:
         ds = ds.batch(self.cfg.batch_size, drop_remainder=True)
         return ds.as_numpy_iterator()
 
-    def make_learner(self,
-                     rng_key: jax.random.PRNGKey,
-                     client: reverb.Client
-                     ):
+    def make_learner(self):
         networks = make_networks(self.cfg)
         params = networks.init(jax.random.PRNGKey(0))
+        client = reverb.Client(f'localhost:{self.cfg.port}')
         client.insert(params, priorities={"weights": 1.})
         ds = self.make_dataset_iterator()
 
@@ -80,7 +83,7 @@ class Builder:
             optax.clip_by_global_norm(self.cfg.max_grad),
             optax.adam(self.cfg.learning_rate)
         )
-        return Learner(rng_key,
+        return Learner(self.learner_rng,
                        self.cfg,
                        networks,
                        optim,
