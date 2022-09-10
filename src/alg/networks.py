@@ -12,7 +12,7 @@ from src.consts import MAX_BOARD_SCORE
 
 tfd = tfp.distributions
 MAX_BOARD_SCORE = float(MAX_BOARD_SCORE)
-MIN_LOGIT = -1e9
+MIN_LOGIT = -1e5
 
 
 def ln_factory():
@@ -174,7 +174,7 @@ class Actor(hk.Module):
             logits,
             MIN_LOGIT
         )
-        return masked_logits
+        return logits, masked_logits
 
 
 class Networks(NamedTuple):

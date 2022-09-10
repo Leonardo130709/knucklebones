@@ -1,4 +1,5 @@
 from typing import Any, NamedTuple
+import pickle
 
 import jax
 import jax.numpy as jnp
@@ -38,31 +39,28 @@ class Learner:
         @chex.assert_max_traces(n=3)
         def _step(state, data):
             params, optim_state = state
-            states, actions, scores, discounts = map(
+            states, actions, discounts = map(
                 data.get,
-                ("states", "actions", "scores", "discounts")
+                ("states", "actions", "discounts")
             )
             
-            def policy_loss(actor_params, states, actions, advantages, discounts):
-                logits = networks.actor(actor_params, states)
+            def policy_loss(actor_params, states, actions, advantages):
+                logits, _ = networks.actor(actor_params, states)
                 dist = networks.make_dist(logits)
                 log_prob = dist.log_prob(actions)
 
                 entropy = dist.entropy()
                 chex.assert_equal_shape([log_prob, advantages, discounts, entropy])
 
-                cross_entropy_loss = - jnp.mean(discounts * log_prob)
-                reinforce_loss = - jnp.mean(advantages * log_prob)
+                cross_entropy_loss = - jnp.mean(advantages * log_prob)
                 entropy_loss = - jnp.mean(entropy)
 
                 loss =\
                     cross_entropy_loss +\
-                    config.reinforce_conf * reinforce_loss +\
                     config.entropy_coef * entropy_loss
 
                 metrics = dict(
                     ce_loss=cross_entropy_loss,
-                    reinforce_loss=reinforce_loss,
                     entropy=-entropy_loss
                 )
                 return loss, metrics
@@ -73,26 +71,29 @@ class Learner:
                 loss = jnp.square(values - scores)
                 return jnp.mean(loss), values
 
-            def model_loss(params, states, actions, scores, discounts):
-                scores = scores * discounts
-                critic_loss, values = value_loss(params, states, scores)
-                adv = jax.lax.stop_gradient(scores - values)
-                actor_loss, metrics = policy_loss(params, states, actions, adv, discounts)
+            def model_loss(params, states, actions, returns):
+                critic_loss, values = value_loss(params, states, returns)
+                adv = jnp.clip(
+                    jax.lax.stop_gradient(returns - values),
+                    a_min=-config.adv_clip,
+                    a_max=config.adv_clip
+                )
+                actor_loss, metrics = policy_loss(params, states, actions, adv)
                 loss = actor_loss + config.critic_loss_coef * critic_loss
 
-                r2 = 1 - critic_loss / jnp.var(scores)
+                r2 = 1 - critic_loss / jnp.var(returns)
                 chex.assert_rank(r2, 0)
                 metrics.update(
                     dict(
                         critic_loss=critic_loss,
                         mean_value=jnp.mean(values),
                         r2=r2,
-                        mean_score=jnp.mean(scores)
+                        mean_score=jnp.mean(returns)
                     )
                 )
                 return loss, metrics
 
-            grads, metrics = jax.grad(model_loss, has_aux=True)(params, states, actions, scores, discounts)
+            grads, metrics = jax.grad(model_loss, has_aux=True)(params, states, actions, discounts)
             update, optim_state = optim.update(grads, optim_state)
             grad_norm = optax.global_norm(update)
             metrics['grad_norm'] = grad_norm
@@ -101,7 +102,6 @@ class Learner:
             return LearnerState(params, optim_state), metrics
 
         self._step = jax.jit(_step)
-        # self._step = _step
 
     def run(self):
         while True:
@@ -115,5 +115,4 @@ class Learner:
             self._printer.write(metrics)
             self._client.insert(self._state.params, priorities={"weights": 1.})
             with open("weights.pickle", "wb") as f:
-                import pickle
                 pickle.dump(self._state.params, f)

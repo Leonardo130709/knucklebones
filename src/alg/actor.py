@@ -22,14 +22,14 @@ class Actor:
                  config: Config,
                  networks: Networks,
                  client: reverb.Client,
+                 shared_values
                  ):
         self._rng_seq = hk.PRNGSequence(rng_key)
         self._config = config
         self._nets = networks
         self._client = client
         self._params = None
-        self.interactions_count = 0
-        self.finished_games = 0
+        self._shared = shared_values
         self._ds = reverb.TimestepDataset.from_table_signature(
             client.server_address,
             table="weights",
@@ -43,7 +43,7 @@ class Actor:
                  rng: jax.random.PRNGKey,
                  state: GameState, training: bool
                  ):
-            logits = networks.actor(params, state)
+            _, logits = networks.actor(params, state)
             if training:
                 k1, k2, k3 = jax.random.split(rng, 3)
                 dist = networks.make_dist(logits)
@@ -94,7 +94,7 @@ class Actor:
             lambda *t: jnp.stack(t), *w_self_summaries)
 
         summaries = dict(
-            step=self.finished_games,
+            step=self._shared.total_steps.value,
             w_random_wins=np.mean(w_rand_summaries["winner"]),
             w_random_score=np.mean(w_rand_summaries["winner_score"]),
             w_self_score=np.mean(w_self_summaries["winner_score"]),
@@ -108,12 +108,12 @@ class Actor:
         while True:
             self._params = self.get_params()
             summary = self._env.play()
-            self.finished_games += 1
+            self._shared.completed_games.value += 1
             states, actions, steps, score = map(
                 summary.get,
                 ("winner_states", "winner_actions", "length", "winner_score")
             )
-            self.interactions_count += steps
+            self._shared.total_steps.value += steps
 
             discounts = self._config.discount ** \
                         np.arange(len(actions) - 1, -1, -1)
@@ -124,7 +124,6 @@ class Actor:
                 writer.append({
                     "states": state,
                     "actions": action,
-                    "scores": score,
                     "discounts": discount
                 })
                 writer.create_item(
@@ -137,5 +136,5 @@ class Actor:
                 )
                 writer.flush(block_until_num_items=10)
 
-            if self.finished_games % self._config.eval_steps == 0:
+            if self._shared.completed_games.value % self._config.eval_steps == 0:
                 self.evaluate()

@@ -1,3 +1,6 @@
+import multiprocessing as mp
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 import haiku as hk
@@ -12,16 +15,28 @@ from .learner import Learner
 from src.game import GameState
 
 
+class MultiprocessValues(NamedTuple):
+    completed_games: mp.Value
+    total_steps: mp.Value
+
+
 class Builder:
     def __init__(self, config: Config):
         self.cfg = config
         rng = jax.random.PRNGKey(self.cfg.seed)
         self.actor_rng, self.learner_rng = jax.random.split(rng)
+        self._actors_shared_values = MultiprocessValues(
+            mp.Value('i', 0), mp.Value('i', 0))
 
     def make_actor(self):
         networks = make_networks(self.cfg)
         client = reverb.Client(f'localhost:{self.cfg.port}')
-        return Actor(self.actor_rng, self.cfg, networks, client)
+        return Actor(self.actor_rng,
+                     self.cfg,
+                     networks,
+                     client,
+                     self._actors_shared_values
+                     )
 
     def make_server(self):
         networks = make_networks(self.cfg)
@@ -32,7 +47,6 @@ class Builder:
             {
                 "states": GameState.zeroes(),
                 "actions": jnp.array(0, dtype=jnp.int32),
-                "scores": jnp.array(0, dtype=jnp.float32),
                 "discounts": jnp.array(0, dtype=jnp.float32)
              }
         )
