@@ -109,7 +109,7 @@ class Actor:
             )
             return {k: v for k, v in d.items() if k in keys}
 
-        for i in range(100):
+        for i in range(self._config.eval_games):
             w_rand_summaries.append(_filter(w_random.play()))
             w_self_summaries.append(_filter(w_self.play()))
 
@@ -124,9 +124,10 @@ class Actor:
             w_random_score=w_rand_summaries["total_score1"],
             w_random_difference=w_rand_summaries["scores_difference"],
             random_length=w_rand_summaries["length"],
-            w_self_score=w_self_summaries["winner_score"],
+            w_self_wins=w_self_summaries["winner"],
+            w_self_score=w_self_summaries["total_score1"],
+            self_difference=w_self_summaries["scores_difference"],
             self_length=w_self_summaries["length"],
-            self_difference=w_self_summaries["scores_difference"]
         )
         summaries = jax.tree_util.tree_map(np.mean, summaries)
         summaries["step"] = self._shared.total_steps.value
@@ -169,6 +170,8 @@ class Actor:
                     )
                     writer.flush(block_until_num_items=10)
 
-            if self._shared.completed_games.value % self._config.eval_steps ==0:
-                with self._shared.completed_games:
-                    self.evaluate()
+            if self._shared.completed_games.value % self._config.eval_steps == 0:
+                lock = self._shared.completed_games.get_lock()
+                if not lock.locked():
+                    with lock:
+                        self.evaluate()

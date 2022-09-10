@@ -185,15 +185,6 @@ def make_networks(cfg: Config):
     @hk.without_apply_rng
     @hk.multi_transform
     def factory():
-        encoder = BoardEncoder(
-            cfg.hidden_dim,
-            cfg.row_encoder_layers,
-            cfg.row_num_heads,
-            cfg.col_encoder_layers,
-            cfg.col_num_heads,
-            cfg.board_emb_dim,
-            cfg.activation
-        )
         actor = Actor(COLUMNS, cfg.hidden_dim, cfg.actor_layers, cfg.activation)
         critic = hk.nets.MLP(
             cfg.critic_layers * [cfg.hidden_dim] + [1],
@@ -208,6 +199,15 @@ def make_networks(cfg: Config):
             return val, logits
 
         def encoder_fn(state: GameState):
+            encoder = BoardEncoder(
+                cfg.hidden_dim,
+                cfg.row_encoder_layers,
+                cfg.row_num_heads,
+                cfg.col_encoder_layers,
+                cfg.col_num_heads,
+                cfg.board_emb_dim,
+                cfg.activation
+            )
             state = state._replace(
                 player_board=encoder(state.player_board),
                 opponent_board=encoder(state.opponent_board),
