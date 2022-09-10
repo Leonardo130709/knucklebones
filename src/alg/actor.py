@@ -28,13 +28,19 @@ class Actor:
         self._config = config
         self._nets = networks
         self._client = client
-        self._params = None
         self._shared = shared_values
-        self._ds = reverb.TimestepDataset.from_table_signature(
+
+        self._self_ds = reverb.TimestepDataset.from_table_signature(
             client.server_address,
             table="weights",
-            max_in_flight_samples_per_worker=2
+            max_in_flight_samples_per_worker=1
         ).as_numpy_iterator()
+        self._opp_ds = reverb.TimestepDataset.from_table_signature(
+            client.server_address,
+            table="opponents_weights",
+            max_in_flight_samples_per_worker=1,
+        ).as_numpy_iterator()
+
         self._callback = TFSummaryLogger(
             self._config.logdir, "eval", step_key="step")
         self._printer = TerminalOutput()
@@ -66,33 +72,44 @@ class Actor:
             return action
 
         self._act = jax.jit(_act, device=self._device, static_argnums=(3,))
-        policy = lambda state: self.act(state, training=True)
-        self._env = Knucklebones(policy, policy)
+        self_policy = lambda x: self.act(self._params, x, training=True)
+        opp_policy = lambda x: self.act(self._opp_params, x, training=False)
+        self._env = Knucklebones(opp_policy, self_policy)
 
-    def act(self, state: GameState, training: bool):
+    def act(self, params, state: GameState, training: bool):
         state = jax.device_put(state, self._device)
         rng = next(self._rng_seq)
-        action = self._act(self._params, rng, state, training)
+        action = self._act(params, rng, state, training)
         return np.asarray(action)
 
-    def get_params(self):
-        params = next(self._ds).data
-        return jax.device_put(params, self._device)
+    def _update_params(self):
+        self_params = next(self._self_ds).data
+        opponents_params = next(self._opp_ds).data
+        self._params, self._opp_params =\
+            jax.device_put((self_params, opponents_params), self._device)
 
     def evaluate(self):
         rng_agent = RandomAgent()
-        policy = lambda state: self.act(state, training=False)
+        policy = lambda state: self.act(self._params, state, training=False)
+        old_policy = lambda state: self.act(self._opp_params, state, training=False)
         w_random = Knucklebones(rng_agent, policy)
-        w_self = Knucklebones(policy, policy)
+        w_self = Knucklebones(old_policy, policy)
 
         w_rand_summaries = []
         w_self_summaries = []
 
         def _filter(d):
-            keys = ("winner", "winner_score", "length")
+            keys = (
+                "winner",
+                "total_score0",
+                "total_score1",
+                "length",
+                "winner_score",
+                "scores_difference"
+            )
             return {k: v for k, v in d.items() if k in keys}
 
-        for i in range(200):
+        for i in range(100):
             w_rand_summaries.append(_filter(w_random.play()))
             w_self_summaries.append(_filter(w_self.play()))
 
@@ -103,46 +120,55 @@ class Actor:
 
         summaries = dict(
             step=self._shared.total_steps.value,
-            w_random_wins=np.mean(w_rand_summaries["winner"]),
-            w_random_score=np.mean(w_rand_summaries["winner_score"]),
-            w_self_score=np.mean(w_self_summaries["winner_score"]),
-            mean_length=np.mean(w_self_summaries["length"])
+            w_random_wins=w_rand_summaries["winner"],
+            w_random_score=w_rand_summaries["total_score1"],
+            w_random_difference=w_rand_summaries["scores_difference"],
+            random_length=w_rand_summaries["length"],
+            w_self_score=w_self_summaries["winner_score"],
+            self_length=w_self_summaries["length"],
+            self_difference=w_self_summaries["scores_difference"]
         )
+        summaries = jax.tree_util.tree_map(np.mean, summaries)
+        summaries["step"] = self._shared.total_steps.value
         self._callback.write(summaries)
         self._printer.write(summaries)
 
     def run(self):
-        writer = self._client.trajectory_writer(num_keep_alive_refs=1)
         while True:
-            self._params = self.get_params()
+            self._update_params()
             summary = self._env.play()
             self._shared.completed_games.value += 1
-            states, actions, steps, score = map(
+            states, actions, steps, winner = map(
                 summary.get,
-                ("winner_states", "winner_actions", "length", "winner_score")
+                ("states_history", "actions_history", "length", "winner")
             )
+            states = states[1]
+            actions = actions[1]
+            score = 2 * winner - 1
             self._shared.total_steps.value += steps
 
             discounts = self._config.discount ** \
                         np.arange(len(actions) - 1, -1, -1)
             discounts = discounts.astype(np.float32)
-            score = np.asarray(score / MAX_BOARD_SCORE, dtype=np.float32)
+            scores = score * discounts
 
-            for state, action, discount in zip(states, actions, discounts):
-                writer.append({
-                    "states": state,
-                    "actions": action,
-                    "discounts": discount
-                })
-                writer.create_item(
-                    table="replay_buffer",
-                    priority=score,
-                    trajectory=jax.tree_util.tree_map(
-                        lambda t: t[-1],
-                        writer.history
+            with self._client.trajectory_writer(num_keep_alive_refs=1) as writer:
+                for state, action, score in zip(states, actions, scores):
+                    writer.append({
+                        "states": state,
+                        "actions": action,
+                        "scores": score
+                    })
+                    writer.create_item(
+                        table="replay_buffer",
+                        priority=1.,
+                        trajectory=jax.tree_util.tree_map(
+                            lambda t: t[-1],
+                            writer.history
+                        )
                     )
-                )
-                writer.flush(block_until_num_items=10)
+                    writer.flush(block_until_num_items=10)
 
-            if self._shared.completed_games.value % self._config.eval_steps == 0:
-                self.evaluate()
+            if self._shared.completed_games.value % self._config.eval_steps ==0:
+                with self._shared.completed_games:
+                    self.evaluate()

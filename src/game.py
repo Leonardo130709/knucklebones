@@ -162,19 +162,23 @@ class Knucklebones:
         # Ambiguous win cond when scores are equal.
         winner = int(score1 > score0)
         winner_score = score1 if winner else score0
+        difference = int(score1) - int(score0)
 
         return {
-            'winner': winner,
-            'total_score0': score0,
-            'total_score1': score1,
-            'length': steps,
-            'fin_turn': turn,
-            'first_turn': first_turn,
-            'column_scores0': column_scores0,
-            'column_scores1': column_scores1,
-            'board0': self._boards[0].state,
-            'board1': self._boards[1].state,
-            'winner_states': states[winner],
-            'winner_actions': actions[winner],
-            'winner_score': winner_score
+            "winner": winner,
+            "total_score0": score0,
+            "total_score1": score1,
+            "length": steps,
+            "fin_turn": turn,
+            "first_turn": first_turn,
+            "column_scores0": column_scores0,
+            "column_scores1": column_scores1,
+            "board0": self._boards[0].state,
+            "board1": self._boards[1].state,
+            "states_history": states,
+            "actions_history": actions,
+            "winner_states": states[winner],
+            "winner_actions": actions[winner],
+            "winner_score": winner_score,
+            "scores_difference": difference
         }

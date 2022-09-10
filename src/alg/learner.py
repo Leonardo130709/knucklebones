@@ -8,7 +8,7 @@ import optax
 import reverb
 import chex
 
-from rltools.loggers import TFSummaryLogger, TerminalOutput
+from rltools.loggers import TFSummaryLogger
 from .networks import Networks
 from .config import Config
 
@@ -32,19 +32,20 @@ class Learner:
         optim_state = optim.init(params)
         self._state = LearnerState(params, optim_state)
         self._config = config
+        with open(f"{config.logdir}/config.pickle", "wb") as cfg_f:
+            pickle.dump(config, cfg_f)
         self._ds = dataset
         self._client = client
         self.gradient_steps = 0
         self._callback = TFSummaryLogger(
         self._config.logdir, "train", step_key="step")
-        # self._printer = TerminalOutput()
 
         @chex.assert_max_traces(n=3)
         def _step(learner_state, data):
             params, optim_state = learner_state
-            states, actions, discounts = map(
+            states, actions, scores = map(
                 data.get,
-                ("states", "actions", "discounts")
+                ("states", "actions", "scores")
             )
             
             def policy_loss(actor_params, states, actions, advantages):
@@ -76,12 +77,11 @@ class Learner:
 
             def model_loss(params, states, actions, scores):
                 critic_loss, values = value_loss(params, states, scores)
-                # adv = jnp.clip(
-                #     jax.lax.stop_gradient(scores - values),
-                #     a_min=-config.adv_clip,
-                #     a_max=config.adv_clip
-                # )
-                adv = scores
+                adv = jnp.clip(
+                    jax.lax.stop_gradient(scores - values),
+                    a_min=-config.adv_clip,
+                    a_max=config.adv_clip
+                )
                 actor_loss, metrics = policy_loss(params, states, actions, adv)
                 loss = actor_loss + config.critic_loss_coef * critic_loss
 
@@ -97,7 +97,7 @@ class Learner:
                 )
                 return loss, metrics
 
-            grads, metrics = jax.grad(model_loss, has_aux=True)(params, states, actions, discounts)
+            grads, metrics = jax.grad(model_loss, has_aux=True)(params, states, actions, scores)
             update, optim_state = optim.update(grads, optim_state)
             grad_norm = optax.global_norm(update)
             metrics["grad_norm"] = grad_norm
@@ -116,7 +116,9 @@ class Learner:
             self.gradient_steps += 1
             metrics["step"] = self.gradient_steps
             self._callback.write(metrics)
-            # self._printer.write(metrics)
-            self._client.insert(self._state.params, priorities={"weights": 1.})
+            self._client.insert(self._state.params, priorities={
+                "weights": 1.,
+                "opponents_weights": 1.
+            })
             with open(f"{self._config.logdir}/weights.pickle", "wb") as f:
                 pickle.dump(self._state.params, f)

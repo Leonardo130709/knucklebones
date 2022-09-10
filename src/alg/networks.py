@@ -173,7 +173,6 @@ class Actor(hk.Module):
 
 class Networks(NamedTuple):
     init: Callable
-    encoder: Callable
     actor: Callable
     critic: Callable
     make_dist: Callable
@@ -236,15 +235,14 @@ def make_networks(cfg: Config):
             v = critic(flatten_state)
             return jnp.squeeze(v, axis=-1)
 
-        return init, (encoder_fn, actor_fn, value_fn)
+        return init, (actor_fn, value_fn)
 
     def make_dist(logits):
         return tfd.Categorical(logits)
 
-    encoder, actor, critic = factory.apply
+    actor, critic = factory.apply
     return Networks(
         init=factory.init,
-        encoder=encoder,
         actor=actor,
         critic=critic,
         make_dist=make_dist

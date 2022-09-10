@@ -50,7 +50,7 @@ class Builder:
             {
                 "states": GameState.zeroes(),
                 "actions": jnp.array(0, dtype=jnp.int32),
-                "discounts": jnp.array(0, dtype=jnp.float32)
+                "scores": jnp.array(0, dtype=jnp.float32)
              }
         )
         params = networks.init(jax.random.PRNGKey(0))
@@ -68,12 +68,20 @@ class Builder:
                 signature=params_signature
             ),
             reverb.Table(
+                name="opponents_weights",
+                sampler=reverb.selectors.Uniform(),
+                remover=reverb.selectors.Fifo(),
+                max_size=self.cfg.weights_history,
+                rate_limiter=reverb.rate_limiters.MinSize(1),
+                signature=params_signature
+            ),
+            reverb.Table(
                 name="replay_buffer",
                 sampler=reverb.selectors.Lifo(),
                 remover=reverb.selectors.Fifo(),
-                max_size=2 * int(self.cfg.batch_size),
+                max_size=int(self.cfg.batch_size),
                 rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-                    .3, self.cfg.batch_size, 1),
+                    1., self.cfg.batch_size, 1),
                 signature=trajectory_signature
             )
         ]
@@ -92,7 +100,10 @@ class Builder:
         networks = make_networks(self.cfg)
         params = networks.init(jax.random.PRNGKey(0))
         client = reverb.Client(f'localhost:{self.cfg.port}')
-        client.insert(params, priorities={"weights": 1.})
+        client.insert(params, priorities={
+            "weights": 1.,
+            "opponents_weights": 1.
+        })
         ds = self.make_dataset_iterator()
 
         optim = optax.chain(
