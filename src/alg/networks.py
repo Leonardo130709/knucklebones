@@ -12,7 +12,7 @@ from src.consts import MAX_BOARD_SCORE
 
 tfd = tfp.distributions
 MAX_BOARD_SCORE = float(MAX_BOARD_SCORE)
-MIN_LOGIT = -1e6
+MIN_LOGIT = -1e9
 
 
 def ln_factory():
@@ -140,10 +140,12 @@ class Actor(hk.Module):
             self,
             act_dim: int,
             hidden_dim: int,
+            layers: int,
             activation: str
     ):
         super().__init__()
         self.act_dim = act_dim
+        self._layers = layers
         self._hidden_dim = hidden_dim
         self._act = activation
 
@@ -156,14 +158,17 @@ class Actor(hk.Module):
             state.dice
         ], axis=-1)
         logits = hk.nets.MLP(
-            2*[self._hidden_dim],
+            self._layers * [self._hidden_dim],
             w_init=hk.initializers.VarianceScaling(),
             activation=_ACTIVATION[self._act],
             activate_final=True
         )(x)
 
-        logits = hk.Linear(self.act_dim,
-                           w_init=jnp.zeros)(logits)
+        logits = hk.Linear(
+            self.act_dim,
+            w_init=jnp.zeros
+        )(logits)
+
         masked_logits = jnp.where(
             state.action_mask,
             logits,
@@ -196,7 +201,7 @@ def make_networks(cfg: Config):
             cfg.board_emb_dim,
             cfg.activation
         )
-        actor = Actor(COLUMNS, cfg.hidden_dim, cfg.activation)
+        actor = Actor(COLUMNS, cfg.hidden_dim, cfg.actor_layers, cfg.activation)
         critic = hk.nets.MLP(
             cfg.critic_layers * [cfg.hidden_dim] + [1],
             w_init=hk.initializers.VarianceScaling(),

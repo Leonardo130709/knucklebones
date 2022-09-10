@@ -94,6 +94,8 @@ class Learner:
 
             grads, metrics = jax.grad(model_loss, has_aux=True)(params, states, actions, scores, discounts)
             update, optim_state = optim.update(grads, optim_state)
+            grad_norm = optax.global_norm(update)
+            metrics['grad_norm'] = grad_norm
             params = optax.apply_updates(params, update)
 
             return LearnerState(params, optim_state), metrics
@@ -112,5 +114,6 @@ class Learner:
             self._callback.write(metrics)
             self._printer.write(metrics)
             self._client.insert(self._state.params, priorities={"weights": 1.})
-            jnp.savez("weights.npz", **self._state.params)
-
+            with open("weights.pickle", "wb") as f:
+                import pickle
+                pickle.dump(self._state.params, f)

@@ -135,7 +135,7 @@ class Actor:
                         writer.history
                     )
                 )
-                writer.flush(block_until_num_items=5)
+                writer.flush(block_until_num_items=10)
 
-            if self.finished_games % 1000 == 0:
+            if self.finished_games % self._config.eval_steps == 0:
                 self.evaluate()
