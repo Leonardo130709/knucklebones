@@ -14,6 +14,7 @@ from src.agents import RandomAgent
 from src.consts import MAX_BOARD_SCORE
 
 CPU = jax.devices("cpu")[0]
+MIN_LOGIT = -1e9
 
 
 class Actor:
@@ -35,7 +36,8 @@ class Actor:
             table="weights",
             max_in_flight_samples_per_worker=2
         ).as_numpy_iterator()
-        self._callback = TFSummaryLogger('logdir', 'eval', step_key='step')
+        self._callback = TFSummaryLogger(
+            self._config.logdir, 'eval', step_key='step')
         self._printer = TerminalOutput()
 
         @chex.assert_max_traces(n=2)
@@ -43,18 +45,23 @@ class Actor:
                  rng: jax.random.PRNGKey,
                  state: GameState, training: bool
                  ):
-            _, logits = networks.actor(params, state)
+            logits = networks.actor(params, state)
+            mask = state.action_mask
+            masked_logits = jnp.where(
+                mask,
+                logits,
+                MIN_LOGIT
+            )
             if training:
                 k1, k2, k3 = jax.random.split(rng, 3)
-                dist = networks.make_dist(logits)
-                mask = state.action_mask
+                dist = networks.make_dist(masked_logits)
                 action = jax.lax.select(
                     jax.random.uniform(k1) < self._config.epsilon,
                     jax.random.choice(k2, mask.shape[0], (), p=mask),
                     dist.sample(seed=k3)
                 )
             else:
-                action = jnp.argmax(logits, axis=-1)
+                action = jnp.argmax(masked_logits, axis=-1)
             return action
 
         self._act = jax.jit(_act, static_argnums=(3,))
@@ -84,7 +91,7 @@ class Actor:
             keys = ('winner', "winner_score", "length")
             return {k: v for k, v in d.items() if k in keys}
 
-        for i in range(100):
+        for i in range(200):
             w_rand_summaries.append(_filter(w_random.play()))
             w_self_summaries.append(_filter(w_self.play()))
 

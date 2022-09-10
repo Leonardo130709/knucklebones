@@ -3,6 +3,7 @@ import pickle
 
 import jax
 import jax.numpy as jnp
+import haiku as hk
 import optax
 import reverb
 import chex
@@ -27,14 +28,16 @@ class Learner:
                  client: reverb.Client
                  ):
         params = networks.init(rng_key)
+        print("Learnable params: ", hk.data_structures.tree_size(params))
         optim_state = optim.init(params)
         self._state = LearnerState(params, optim_state)
         self._config = config
         self._ds = dataset
         self._client = client
         self.gradient_steps = 0
-        self._callback = TFSummaryLogger('logdir', 'train', step_key='step')
-        self._printer = TerminalOutput()
+        self._callback = TFSummaryLogger(
+        self._config.logdir, 'train', step_key='step')
+        # self._printer = TerminalOutput()
 
         @chex.assert_max_traces(n=3)
         def _step(state, data):
@@ -45,7 +48,7 @@ class Learner:
             )
             
             def policy_loss(actor_params, states, actions, advantages):
-                logits, _ = networks.actor(actor_params, states)
+                logits = networks.actor(actor_params, states)
                 dist = networks.make_dist(logits)
                 log_prob = dist.log_prob(actions)
 
@@ -112,7 +115,7 @@ class Learner:
             self.gradient_steps += 1
             metrics["step"] = self.gradient_steps
             self._callback.write(metrics)
-            self._printer.write(metrics)
+            # self._printer.write(metrics)
             self._client.insert(self._state.params, priorities={"weights": 1.})
             with open("weights.pickle", "wb") as f:
                 pickle.dump(self._state.params, f)

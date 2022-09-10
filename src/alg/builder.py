@@ -31,7 +31,8 @@ class Builder:
     def make_actor(self):
         networks = make_networks(self.cfg)
         client = reverb.Client(f'localhost:{self.cfg.port}')
-        return Actor(self.actor_rng,
+        self.actor_rng, rng = jax.random.split(self.actor_rng)
+        return Actor(rng,
                      self.cfg,
                      networks,
                      client,
@@ -97,7 +98,8 @@ class Builder:
             optax.clip_by_global_norm(self.cfg.max_grad),
             optax.adam(self.cfg.learning_rate)
         )
-        return Learner(self.learner_rng,
+        self.learner_rng, rng = jax.random.split(self.learner_rng)
+        return Learner(rng,
                        self.cfg,
                        networks,
                        optim,

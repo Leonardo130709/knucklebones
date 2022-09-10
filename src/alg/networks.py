@@ -8,11 +8,10 @@ import tensorflow_probability.substrates.jax as tfp
 from .config import Config
 from src.consts import COLUMNS
 from src.game import GameState
-from src.consts import MAX_BOARD_SCORE
+from src.consts import MAX_COLUMN_SCORE
 
 tfd = tfp.distributions
-MAX_BOARD_SCORE = float(MAX_BOARD_SCORE)
-MIN_LOGIT = -1e5
+MAX_COLUMN_SCORE = float(MAX_COLUMN_SCORE)
 
 
 def ln_factory():
@@ -149,32 +148,27 @@ class Actor(hk.Module):
         self._hidden_dim = hidden_dim
         self._act = activation
 
-    def __call__(self, state: GameState):
-        x = jnp.concatenate([
+    def __call__(self, state):
+        flatten_state = jnp.concatenate([
             state.player_board,
             state.opponent_board,
             state.player_col_scores,
             state.opponent_col_scores,
             state.dice
         ], axis=-1)
-        logits = hk.nets.MLP(
+        flatten_state = hk.nets.MLP(
             self._layers * [self._hidden_dim],
             w_init=hk.initializers.VarianceScaling(),
             activation=_ACTIVATION[self._act],
             activate_final=True
-        )(x)
+        )(flatten_state)
 
         logits = hk.Linear(
             self.act_dim,
             w_init=jnp.zeros
-        )(logits)
+        )(flatten_state)
 
-        masked_logits = jnp.where(
-            state.action_mask,
-            logits,
-            MIN_LOGIT
-        )
-        return logits, masked_logits
+        return logits
 
 
 class Networks(NamedTuple):
@@ -215,20 +209,31 @@ def make_networks(cfg: Config):
             return val, logits
 
         def encoder_fn(state: GameState):
-            return state._replace(
+            state = state._replace(
                 player_board=encoder(state.player_board),
                 opponent_board=encoder(state.opponent_board),
-                player_col_scores=state.player_col_scores / MAX_BOARD_SCORE,
-                opponent_col_scores=state.opponent_col_scores / MAX_BOARD_SCORE
+                player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
+                opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
             )
+            return state
 
         def actor_fn(state: GameState):
             state = encoder_fn(state)
             return actor(state)
 
         def value_fn(state: GameState):
-            state = encoder(state.player_board)
-            v = critic(state)
+            state = encoder_fn(state)
+            flatten_state = jnp.concatenate(
+                [
+                    state.player_board,
+                    state.opponent_board,
+                    # state.player_col_scores,
+                    # state.opponent_col_scores,
+                    # state.dice
+                ],
+                axis=-1
+            )
+            v = critic(flatten_state)
             return jnp.squeeze(v, axis=-1)
 
         return init, (encoder_fn, actor_fn, value_fn)

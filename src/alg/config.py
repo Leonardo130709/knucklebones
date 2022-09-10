@@ -13,21 +13,24 @@ class Config(BaseConfig):
     epsilon: float = .1
 
     # architecture
-    hidden_dim: int = 128
-    row_encoder_layers: int = 1
+    hidden_dim: int = 64
+    row_encoder_layers: int = 2
     row_num_heads: int = 1
-    col_encoder_layers: int = 1
+    col_encoder_layers: int = 2
     col_num_heads: int = 1
-    board_emb_dim: int = 16
+    board_emb_dim: int = 32
     critic_layers: int = 2
     actor_layers: int = 2
     activation: str = "elu"
 
     # train
     learning_rate: float = 1e-3
-    batch_size: int = 1024
+    batch_size: int = 2048
     max_grad: float = 40.
-    eval_steps: int = 10000
+    eval_steps: int = 5000
+
+    num_actors: int = 5
     seed: int = 0
     port: int = 41922
-    num_actors: int = 5
+    logdir: str = "logdir/latest"
+
