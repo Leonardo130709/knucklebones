@@ -1,3 +1,9 @@
+import os
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+
+
 import multiprocessing
 import reverb
 

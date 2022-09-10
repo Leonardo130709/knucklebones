@@ -16,6 +16,7 @@ from src.game import GameState
 
 
 class MultiprocessValues(NamedTuple):
+    num_actors: mp.Value
     completed_games: mp.Value
     total_steps: mp.Value
 
@@ -26,7 +27,8 @@ class Builder:
         rng = jax.random.PRNGKey(self.cfg.seed)
         self.actor_rng, self.learner_rng = jax.random.split(rng)
         self._actors_shared_values = MultiprocessValues(
-            mp.Value('i', 0), mp.Value('i', 0))
+            mp.Value('i', 0), mp.Value('i', 0), mp.Value('i', 0)
+        )
 
     def make_actor(self):
         networks = make_networks(self.cfg)
@@ -69,10 +71,9 @@ class Builder:
                 name="replay_buffer",
                 sampler=reverb.selectors.Lifo(),
                 remover=reverb.selectors.Fifo(),
-                max_size=int(self.cfg.batch_size),
-                # rate_limiter=reverb.rate_limiters.MinSize(self.cfg.batch_size),
+                max_size=2 * int(self.cfg.batch_size),
                 rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-                    1., self.cfg.batch_size, 1),
+                    .3, self.cfg.batch_size, 1),
                 signature=trajectory_signature
             )
         ]

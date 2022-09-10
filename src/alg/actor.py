@@ -13,7 +13,6 @@ from src.game import GameState, Knucklebones
 from src.agents import RandomAgent
 from src.consts import MAX_BOARD_SCORE
 
-CPU = jax.devices("cpu")[0]
 MIN_LOGIT = -1e9
 
 
@@ -37,8 +36,10 @@ class Actor:
             max_in_flight_samples_per_worker=2
         ).as_numpy_iterator()
         self._callback = TFSummaryLogger(
-            self._config.logdir, 'eval', step_key='step')
+            self._config.logdir, "eval", step_key="step")
         self._printer = TerminalOutput()
+        self._device = jax.devices("cpu")[shared_values.num_actors.value]
+        shared_values.num_actors.value += 1
 
         @chex.assert_max_traces(n=2)
         def _act(params,
@@ -64,19 +65,19 @@ class Actor:
                 action = jnp.argmax(masked_logits, axis=-1)
             return action
 
-        self._act = jax.jit(_act, static_argnums=(3,))
+        self._act = jax.jit(_act, device=self._device, static_argnums=(3,))
         policy = lambda state: self.act(state, training=True)
         self._env = Knucklebones(policy, policy)
 
     def act(self, state: GameState, training: bool):
-        state = jax.device_put(state, CPU)
+        state = jax.device_put(state, self._device)
         rng = next(self._rng_seq)
         action = self._act(self._params, rng, state, training)
         return np.asarray(action)
 
     def get_params(self):
         params = next(self._ds).data
-        return jax.device_put(params, CPU)
+        return jax.device_put(params, self._device)
 
     def evaluate(self):
         rng_agent = RandomAgent()
@@ -88,7 +89,7 @@ class Actor:
         w_self_summaries = []
 
         def _filter(d):
-            keys = ('winner', "winner_score", "length")
+            keys = ("winner", "winner_score", "length")
             return {k: v for k, v in d.items() if k in keys}
 
         for i in range(200):

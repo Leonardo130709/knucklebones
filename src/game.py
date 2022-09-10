@@ -35,7 +35,7 @@ class GameState(NamedTuple):
 
 
 class Board:
-    """Board for the knucklebones game."""
+    """Player board for the Knucklebones game."""
 
     def __init__(self):
         self.reset()
@@ -128,11 +128,12 @@ class Knucklebones:
         actions = defaultdict(list)
         states = defaultdict(list)
 
-        first_turn = self.reset()
-        turn = first_turn
+        turn = self.reset()
+        first_turn = turn ^ 1
         steps = 0
-        while self._boards[turn ^ 1].status != BoardStatus.Fin:
+        while self._boards[turn].status != BoardStatus.Fin:
             steps += 1
+            turn = turn ^ 1
             dice, one_hot_dice = self.roll_dice()
             pl_board = self._boards[turn]
             opp_board = self._boards[turn ^ 1]
@@ -144,7 +145,7 @@ class Knucklebones:
                 opponent_board=opp_board.as_one_hot(),
                 player_col_scores=np.asarray(pl_scores),
                 opponent_col_scores=np.asarray(opp_scores),
-                action_mask=self._boards[turn].possible_actions,
+                action_mask=pl_board.possible_actions,
                 dice=one_hot_dice
             )
             column = self._players[turn](state)
@@ -154,8 +155,6 @@ class Knucklebones:
 
             self._boards[0].update(column, dice, enemy_turn=turn == 1)
             self._boards[1].update(column, dice, enemy_turn=turn == 0)
-
-            turn = turn ^ 1
 
         score0, column_scores0 = self._boards[0].evaluate()
         score1, column_scores1 = self._boards[1].evaluate()

@@ -227,9 +227,9 @@ def make_networks(cfg: Config):
                 [
                     state.player_board,
                     state.opponent_board,
-                    # state.player_col_scores,
-                    # state.opponent_col_scores,
-                    # state.dice
+                    state.player_col_scores,
+                    state.opponent_col_scores,
+                    state.dice
                 ],
                 axis=-1
             )
