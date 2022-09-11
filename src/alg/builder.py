@@ -69,20 +69,9 @@ class Builder:
             ),
             reverb.Table.queue(
                 name="replay_buffer",
-                max_size=self.cfg.batch_size,
+                max_size=self.cfg.buffer_size,
                 signature=trajectory_signature
             )
-            # reverb.Table(
-            #     name="replay_buffer",
-            #     sampler=reverb.selectors.Uniform(),
-            #     remover=reverb.selectors.Fifo(),
-            #     max_size=int(self.cfg.buffer_size),
-            #     max_times_sampled=1,
-            #     rate_limiter=reverb.rate_limiters.MinSize(self.cfg.batch_size),
-            #     # rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-            #     #     1., self.cfg.buffer_size, 1),
-            #     signature=trajectory_signature
-            # )
         ]
         return reverb.Server(tables, self.cfg.port)
 
@@ -90,7 +79,7 @@ class Builder:
         ds = reverb.TrajectoryDataset.from_table_signature(
             f"localhost:{self.cfg.port}",
             table="replay_buffer",
-            max_in_flight_samples_per_worker=self.cfg.batch_size
+            max_in_flight_samples_per_worker=2*self.cfg.batch_size
         )
         ds = ds.batch(self.cfg.batch_size, drop_remainder=True)
         return ds.as_numpy_iterator()

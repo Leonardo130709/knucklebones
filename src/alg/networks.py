@@ -54,7 +54,7 @@ class TransformerLayer(hk.Module):
         att = hk.MultiHeadAttention(
             self._num_heads,
             self._hidden_dim,
-            w_init_scale=1.
+            w_init_scale=3.
         )(*qkv, mask=mask)
 
         return hk.Linear(self._hidden_dim)(att)
@@ -149,13 +149,16 @@ class Actor(hk.Module):
         self._act = activation
 
     def __call__(self, state):
-        flatten_state = jnp.concatenate([
-            state.player_board,
-            state.opponent_board,
-            state.player_col_scores,
-            state.opponent_col_scores,
-            state.dice
-        ], axis=-1)
+        flatten_state = jnp.concatenate(
+            [
+                state.player_board,
+                state.opponent_board,
+                state.player_col_scores,
+                state.opponent_col_scores,
+                state.dice
+            ],
+            axis=-1
+        )
         flatten_state = hk.nets.MLP(
             self._layers * [self._hidden_dim],
             w_init=hk.initializers.VarianceScaling(),
@@ -174,7 +177,6 @@ class Actor(hk.Module):
 class Networks(NamedTuple):
     init: Callable
     actor: Callable
-    critic: Callable
     make_dist: Callable
 
 
@@ -183,67 +185,35 @@ def make_networks(cfg: Config):
     dummy_state = jax.tree_util.tree_map(jnp.float32, dummy_state)
 
     @hk.without_apply_rng
-    @hk.multi_transform
-    def factory():
-        actor = Actor(COLUMNS, cfg.hidden_dim, cfg.actor_layers, cfg.activation)
-        critic = hk.nets.MLP(
-            cfg.critic_layers * [cfg.hidden_dim] + [1],
-            w_init=hk.initializers.VarianceScaling(),
-            activation=_ACTIVATION[cfg.activation],
-            name="critic"
+    @hk.transform
+    def _forward(state):
+        encoder = BoardEncoder(
+            cfg.hidden_dim,
+            cfg.row_encoder_layers,
+            cfg.row_num_heads,
+            cfg.col_encoder_layers,
+            cfg.col_num_heads,
+            cfg.board_emb_dim,
+            cfg.activation
         )
-
-        def init():
-            val = value_fn(dummy_state)
-            logits = actor_fn(dummy_state)
-            return val, logits
-
-        def encoder_fn(state: GameState):
-            encoder = BoardEncoder(
-                cfg.hidden_dim,
-                cfg.row_encoder_layers,
-                cfg.row_num_heads,
-                cfg.col_encoder_layers,
-                cfg.col_num_heads,
-                cfg.board_emb_dim,
-                cfg.activation
-            )
-            state = state._replace(
-                player_board=encoder(state.player_board),
-                opponent_board=encoder(state.opponent_board),
-                player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
-                opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
-            )
-            return state
-
-        def actor_fn(state: GameState):
-            state = encoder_fn(state)
-            return actor(state)
-
-        def value_fn(state: GameState):
-            state = encoder_fn(state)
-            flatten_state = jnp.concatenate(
-                [
-                    state.player_board,
-                    state.opponent_board,
-                    state.player_col_scores,
-                    state.opponent_col_scores,
-                    state.dice
-                ],
-                axis=-1
-            )
-            v = critic(flatten_state)
-            return jnp.squeeze(v, axis=-1)
-
-        return init, (actor_fn, value_fn)
+        state = state._replace(
+            player_board=encoder(state.player_board),
+            opponent_board=encoder(state.opponent_board),
+            player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
+            opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
+        )
+        return Actor(
+            COLUMNS,
+            cfg.hidden_dim,
+            cfg.actor_layers,
+            cfg.activation
+        )(state)
 
     def make_dist(logits):
         return tfd.Categorical(logits)
 
-    actor, critic = factory.apply
     return Networks(
-        init=factory.init,
-        actor=actor,
-        critic=critic,
+        init=lambda key: _forward.init(key, dummy_state),
+        actor=_forward.apply,
         make_dist=make_dist
     )

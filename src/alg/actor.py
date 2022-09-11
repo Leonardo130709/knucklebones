@@ -36,7 +36,7 @@ class Actor:
         ).as_numpy_iterator()
 
         self._callback = TFSummaryLogger(
-            self._config.logdir, "eval", step_key="step")
+            self._config.logdir, step_key="step")
         self._printer = TerminalOutput()
 
         self._device = jax.devices("cpu")[shared_values.num_actors.value]
@@ -87,19 +87,14 @@ class Actor:
     def _update_params(self):
         params = next(self._ds).data
         self._params = jax.device_put(params, self._device)
-
-    def evaluate(self):
-        self_eval = self._opponents["self_eval"]
-        w_random = Knucklebones(
-            self._opponents["rng"],
-            self_eval
+    
+    def _evaluate_against(self, opponent):
+        game = Knucklebones(
+            opponent,
+            self._opponents["self_eval"]
         )
-        w_self = Knucklebones(self_eval, self_eval)
-
-        w_rand_summaries = []
-        w_self_summaries = []
-
-        def _filter(d):
+        
+        def _scalars_filter(d):
             keys = (
                 "winner",
                 "total_score0",
@@ -109,28 +104,27 @@ class Actor:
                 "scores_difference"
             )
             return {k: v for k, v in d.items() if k in keys}
-
-        for i in range(self._config.eval_games):
-            w_rand_summaries.append(_filter(w_random.play()))
-            w_self_summaries.append(_filter(w_self.play()))
-
-        w_rand_summaries = jax.tree_util.tree_map(
-            lambda *t: jnp.stack(t), *w_rand_summaries)
-        w_self_summaries = jax.tree_util.tree_map(
-            lambda *t: jnp.stack(t), *w_self_summaries)
-
-        summaries = dict(
-            step=self._shared.total_steps.value,
-            w_random_wins=w_rand_summaries["winner"],
-            w_random_score=w_rand_summaries["total_score1"],
-            w_random_difference=w_rand_summaries["scores_difference"],
-            random_length=w_rand_summaries["length"],
-            w_self_wins=w_self_summaries["winner"],
-            w_self_score=w_self_summaries["total_score1"],
-            self_difference=w_self_summaries["scores_difference"],
-            self_length=w_self_summaries["length"],
+        
+        summary = [
+            _scalars_filter(game.play()) for _ in range(self._config.eval_games)
+        ]
+        summary = jax.tree_util.tree_map(
+            lambda *t: np.stack(t), *summary)
+        summary = dict(
+            wins=summary["winner"],
+            score=summary["total_score1"],
+            difference=summary["scores_difference"],
+            length=summary["length"],
         )
-        summaries = jax.tree_util.tree_map(np.mean, summaries)
+        return jax.tree_util.tree_map(np.mean, summary)
+            
+    def evaluate(self):
+        summaries = {}
+        for opp in ("rng", "self_eval"):
+            opp_summary = self._evaluate_against(self._opponents[opp])
+            summaries.update(
+                {f"{opp}/{k}": v for k, v in opp_summary.items()}
+            )
         summaries["step"] = self._shared.total_steps.value
         self._callback.write(summaries)
         self._printer.write(summaries)
@@ -165,8 +159,8 @@ class Actor:
                             writer.history
                         )
                     )
-                    writer.flush(block_until_num_items=10)
+                    writer.flush(block_until_num_items=5)
 
             if self._shared.completed_games.value % self._config.eval_steps == 0:
-                with self._shared.completed_games.get_lock():
+                with self._shared.total_steps.get_lock():
                     self.evaluate()
