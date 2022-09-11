@@ -68,20 +68,13 @@ class Builder:
                 signature=params_signature
             ),
             reverb.Table(
-                name="opponents_weights",
+                name="replay_buffer",
                 sampler=reverb.selectors.Uniform(),
                 remover=reverb.selectors.Fifo(),
-                max_size=self.cfg.weights_history,
-                rate_limiter=reverb.rate_limiters.MinSize(1),
-                signature=params_signature
-            ),
-            reverb.Table(
-                name="replay_buffer",
-                sampler=reverb.selectors.Lifo(),
-                remover=reverb.selectors.Fifo(),
-                max_size=int(self.cfg.batch_size),
+                max_size=int(self.cfg.buffer_size),
+                max_times_sampled=1,
                 rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-                    1., self.cfg.batch_size, 1),
+                    1., self.cfg.buffer_size, 1),
                 signature=trajectory_signature
             )
         ]
@@ -91,19 +84,17 @@ class Builder:
         ds = reverb.TrajectoryDataset.from_table_signature(
             f"localhost:{self.cfg.port}",
             table="replay_buffer",
-            max_in_flight_samples_per_worker=self.cfg.batch_size
+            max_in_flight_samples_per_worker=self.cfg.buffer_size
         )
         ds = ds.batch(self.cfg.batch_size, drop_remainder=True)
+        ds = ds.prefetch(-1)
         return ds.as_numpy_iterator()
 
     def make_learner(self):
         networks = make_networks(self.cfg)
         params = networks.init(jax.random.PRNGKey(0))
         client = reverb.Client(f'localhost:{self.cfg.port}')
-        client.insert(params, priorities={
-            "weights": 1.,
-            "opponents_weights": 1.
-        })
+        client.insert(params, priorities={"weights": 1.})
         ds = self.make_dataset_iterator()
 
         optim = optax.chain(

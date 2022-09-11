@@ -4,6 +4,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import haiku as hk
+from IPython.display import clear_output
 
 from src.game import GameState
 
@@ -25,7 +26,13 @@ class RandomAgent(Agent):
 
 
 class ManualControl(Agent):
+
+    def __init__(self, clear_screen: bool = True):
+        self._cls = clear_screen
+
     def __call__(self, state):
+        if self._cls:
+            clear_output()
         _am = lambda x: np.argmax(x, axis=-1)
         print("Opp_board:")
         print(_am(state.opponent_board).T)
@@ -37,15 +44,19 @@ class ManualControl(Agent):
 
 
 class NeuralAgent(Agent):
-    def __init__(self, rng_key, policy_fn, params):
-        self._policy_fn = policy_fn
-        self._params = params
-        self._rng = hk.PRNGSequence(
-            jax.random.PRNGKey(rng_key)
-        )
+
+    def __init__(self, logdir: str):
+        import pickle
+        with open(f"{logdir}/weights.pickle", "rb") as w:
+            self._params = pickle.load(w)
+        with open(f"{logdir}/config.pickle", "rb") as cfg:
+            self._config = pickle.load(cfg)
+        from src.alg.networks import make_networks
+        self._nets = make_networks(self._config)
+        self._device = jax.devices("cpu")[0]
+        self._params = jax.device_put(self._params, self._device)
 
     def __call__(self, state):
-        state = jax.device_put(state)
-        dist = self._policy_fn(self._params, next(self._rng), state)
-        # if training
-        return 0
+        state = jax.device_put(state, self._device)
+        logits = self._nets.actor(self._params, state)
+        return int(jnp.argmax(logits, axis=-1))

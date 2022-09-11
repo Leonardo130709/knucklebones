@@ -11,7 +11,6 @@ from .networks import Networks
 from .config import Config
 from src.game import GameState, Knucklebones
 from src.agents import RandomAgent
-from src.consts import MAX_BOARD_SCORE
 
 MIN_LOGIT = -1e9
 
@@ -30,15 +29,10 @@ class Actor:
         self._client = client
         self._shared = shared_values
 
-        self._self_ds = reverb.TimestepDataset.from_table_signature(
+        self._ds = reverb.TimestepDataset.from_table_signature(
             client.server_address,
             table="weights",
             max_in_flight_samples_per_worker=1
-        ).as_numpy_iterator()
-        self._opp_ds = reverb.TimestepDataset.from_table_signature(
-            client.server_address,
-            table="opponents_weights",
-            max_in_flight_samples_per_worker=1,
         ).as_numpy_iterator()
 
         self._callback = TFSummaryLogger(
@@ -72,28 +66,24 @@ class Actor:
             return action
 
         self._act = jax.jit(_act, device=self._device, static_argnums=(3,))
-        self_policy = lambda x: self.act(self._params, x, training=True)
-        opp_policy = lambda x: self.act(self._opp_params, x, training=False)
-        self._env = Knucklebones(opp_policy, self_policy)
+        policy = lambda state: self.act(state, training=True)
+        self._env = Knucklebones(policy, policy)
 
-    def act(self, params, state: GameState, training: bool):
+    def act(self, state: GameState, training: bool):
         state = jax.device_put(state, self._device)
         rng = next(self._rng_seq)
-        action = self._act(params, rng, state, training)
+        action = self._act(self._params, rng, state, training)
         return np.asarray(action)
 
     def _update_params(self):
-        self_params = next(self._self_ds).data
-        opponents_params = next(self._opp_ds).data
-        self._params, self._opp_params =\
-            jax.device_put((self_params, opponents_params), self._device)
+        params = next(self._ds).data
+        self._params = jax.device_put(params, self._device)
 
     def evaluate(self):
         rng_agent = RandomAgent()
-        policy = lambda state: self.act(self._params, state, training=False)
-        old_policy = lambda state: self.act(self._opp_params, state, training=False)
+        policy = lambda state: self.act(state, training=False)
         w_random = Knucklebones(rng_agent, policy)
-        w_self = Knucklebones(old_policy, policy)
+        w_self = Knucklebones(policy, policy)
 
         w_rand_summaries = []
         w_self_summaries = []
@@ -139,19 +129,15 @@ class Actor:
             self._update_params()
             summary = self._env.play()
             self._shared.completed_games.value += 1
-            states, actions, steps, winner = map(
+            states, actions, steps = map(
                 summary.get,
-                ("states_history", "actions_history", "length", "winner")
+                ("winner_states", "winner_actions", "length")
             )
-            states = states[1]
-            actions = actions[1]
-            score = 2 * winner - 1
             self._shared.total_steps.value += steps
 
             discounts = self._config.discount ** \
                         np.arange(len(actions) - 1, -1, -1)
-            discounts = discounts.astype(np.float32)
-            scores = score * discounts
+            scores = discounts.astype(np.float32)
 
             with self._client.trajectory_writer(num_keep_alive_refs=1) as writer:
                 for state, action, score in zip(states, actions, scores):
@@ -171,7 +157,5 @@ class Actor:
                     writer.flush(block_until_num_items=10)
 
             if self._shared.completed_games.value % self._config.eval_steps == 0:
-                lock = self._shared.completed_games.get_lock()
-                if not lock.locked():
-                    with lock:
-                        self.evaluate()
+                with self._shared.completed_games.get_lock():
+                    self.evaluate()

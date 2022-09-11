@@ -38,7 +38,7 @@ class Learner:
         self._client = client
         self.gradient_steps = 0
         self._callback = TFSummaryLogger(
-        self._config.logdir, "train", step_key="step")
+            self._config.logdir, "train", step_key="step")
 
         @chex.assert_max_traces(n=3)
         def _step(learner_state, data):
@@ -79,9 +79,10 @@ class Learner:
                 critic_loss, values = value_loss(params, states, scores)
                 adv = jnp.clip(
                     jax.lax.stop_gradient(scores - values),
-                    a_min=-config.adv_clip,
+                    a_min=0.,
                     a_max=config.adv_clip
                 )
+                # adv = scores
                 actor_loss, metrics = policy_loss(params, states, actions, adv)
                 loss = actor_loss + config.critic_loss_coef * critic_loss
 
@@ -116,9 +117,6 @@ class Learner:
             self.gradient_steps += 1
             metrics["step"] = self.gradient_steps
             self._callback.write(metrics)
-            self._client.insert(self._state.params, priorities={
-                "weights": 1.,
-                "opponents_weights": 1.
-            })
+            self._client.insert(self._state.params, priorities={"weights": 1.})
             with open(f"{self._config.logdir}/weights.pickle", "wb") as f:
                 pickle.dump(self._state.params, f)
