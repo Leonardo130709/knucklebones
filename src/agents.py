@@ -34,9 +34,9 @@ class ManualControl(Agent):
         if self._cls:
             clear_output()
         _am = lambda x: np.argmax(x, axis=-1)
-        print("Opp_board:")
+        print(f"Opp_board: {state.opponent_col_scores.sum()}")
         print(_am(state.opponent_board).T)
-        print("Player board:")
+        print(f"Player board: {state.player_col_scores.sum()}")
         print(_am(state.player_board).T)
         print("Dice:")
         print(_am(state.dice))

@@ -32,13 +32,14 @@ class Learner:
         optim_state = optim.init(params)
         self._state = LearnerState(params, optim_state)
         self._config = config
-        with open(f"{config.logdir}/config.pickle", "wb") as cfg_f:
-            pickle.dump(config, cfg_f)
         self._ds = dataset
         self._client = client
         self.gradient_steps = 0
+
         self._callback = TFSummaryLogger(
             self._config.logdir, "train", step_key="step")
+        with open(f"{config.logdir}/config.pickle", "wb") as cfg_f:
+            pickle.dump(config, cfg_f)
 
         @chex.assert_max_traces(n=3)
         def _step(learner_state, data):
@@ -77,12 +78,12 @@ class Learner:
 
             def model_loss(params, states, actions, scores):
                 critic_loss, values = value_loss(params, states, scores)
-                adv = jnp.clip(
-                    jax.lax.stop_gradient(scores - values),
-                    a_min=0.,
-                    a_max=config.adv_clip
-                )
-                # adv = scores
+                # adv = jnp.clip(
+                #     jax.lax.stop_gradient(scores - values),
+                #     a_min=0.,
+                #     a_max=config.adv_clip
+                # )
+                adv = scores
                 actor_loss, metrics = policy_loss(params, states, actions, adv)
                 loss = actor_loss + config.critic_loss_coef * critic_loss
 

@@ -21,7 +21,7 @@ class GameState(NamedTuple):
     opponent_col_scores: np.ndarray
     dice: np.ndarray
     action_mask: np.ndarray
-    
+
     @classmethod
     def zeroes(cls):
         return cls(

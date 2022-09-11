@@ -9,11 +9,11 @@ class Config(BaseConfig):
     discount: float = .995
     critic_loss_coef: float = 1.
     adv_clip: float = 1e-2
-    entropy_coef: float = 0.
+    entropy_coef: float = 1e-4
     epsilon: float = .1
 
     # architecture
-    hidden_dim: int = 64
+    hidden_dim: int = 128
     row_encoder_layers: int = 2
     row_num_heads: int = 1
     col_encoder_layers: int = 2
@@ -24,15 +24,14 @@ class Config(BaseConfig):
     activation: str = "elu"
 
     # train
-    learning_rate: float = 1e-4
-    buffer_size: int = 4096
-    batch_size: int = 256
+    learning_rate: float = 1e-3
+    batch_size: int = 512
     max_grad: float = 20.
-    eval_steps: int = 5000
+    eval_steps: int = 10000
     eval_games: int = 200
 
     num_actors: int = 5
     seed: int = 0
     port: int = 41922
-    logdir: str = "logdir/night"
+    logdir: str = "logdir/w_epsilon"
 

@@ -38,8 +38,15 @@ class Actor:
         self._callback = TFSummaryLogger(
             self._config.logdir, "eval", step_key="step")
         self._printer = TerminalOutput()
+
         self._device = jax.devices("cpu")[shared_values.num_actors.value]
         shared_values.num_actors.value += 1
+
+        self._opponents = {
+            "rng": RandomAgent(),
+            "self_train": lambda state: self.act(state, training=True),
+            "self_eval": lambda state: self.act(state, training=False)
+        }
 
         @chex.assert_max_traces(n=2)
         def _act(params,
@@ -66,8 +73,10 @@ class Actor:
             return action
 
         self._act = jax.jit(_act, device=self._device, static_argnums=(3,))
-        policy = lambda state: self.act(state, training=True)
-        self._env = Knucklebones(policy, policy)
+        self._env = Knucklebones(
+            self._opponents["self_train"],
+            self._opponents["self_eval"]
+        )
 
     def act(self, state: GameState, training: bool):
         state = jax.device_put(state, self._device)
@@ -80,10 +89,12 @@ class Actor:
         self._params = jax.device_put(params, self._device)
 
     def evaluate(self):
-        rng_agent = RandomAgent()
-        policy = lambda state: self.act(state, training=False)
-        w_random = Knucklebones(rng_agent, policy)
-        w_self = Knucklebones(policy, policy)
+        self_eval = self._opponents["self_eval"]
+        w_random = Knucklebones(
+            self._opponents["rng"],
+            self_eval
+        )
+        w_self = Knucklebones(self_eval, self_eval)
 
         w_rand_summaries = []
         w_self_summaries = []
