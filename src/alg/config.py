@@ -7,12 +7,15 @@ from rltools.config import Config as BaseConfig
 class Config(BaseConfig):
     # alg
     discount: float = 1.
-    critic_loss_coef: float = 1.
     entropy_coef: float = 1e-4
-    epsilon: float = .1
+
+    # exploration
+    max_epsilon: float = .2
+    min_epsilon: float = .05
+    epsilon_decay_steps: int = int(1e8)
 
     # architecture
-    hidden_dim: int = 32
+    hidden_dim: int = 64
     row_encoder_layers: int = 2
     row_num_heads: int = 1
     col_encoder_layers: int = 2
@@ -22,9 +25,9 @@ class Config(BaseConfig):
     activation: str = "elu"
 
     # train
-    learning_rate: float = 1e-3
-    batch_size: int = 512
-    buffer_size: int = 2048
+    learning_rate: float = 1e-4
+    batch_size: int = 1024
+    buffer_size: int = 4096
     max_grad: float = 10.
     eval_steps: int = 10000
     eval_games: int = 200
@@ -32,5 +35,5 @@ class Config(BaseConfig):
     num_actors: int = 5
     seed: int = 0
     port: int = 41922
-    logdir: str = "logdir/wo_critic"
+    logdir: str = "logdir/scheduler"
 

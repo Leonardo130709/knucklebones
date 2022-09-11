@@ -3,10 +3,10 @@ import abc
 import numpy as np
 import jax
 import jax.numpy as jnp
-import haiku as hk
-from IPython.display import clear_output
+
 
 from src.game import GameState
+from src.consts import COLUMNS
 
 
 class Agent(abc.ABC):
@@ -31,6 +31,7 @@ class ManualControl(Agent):
         self._cls = clear_screen
 
     def __call__(self, state):
+        from IPython.display import clear_output
         if self._cls:
             clear_output()
         _am = lambda x: np.argmax(x, axis=-1)
@@ -40,7 +41,15 @@ class ManualControl(Agent):
         print(_am(state.player_board).T)
         print("Dice:")
         print(_am(state.dice))
-        return int(input())
+
+        valid_action = False
+        while not valid_action:
+            act = input()
+            if act.isdigit():
+                act = int(act) - 1
+                valid_action = state.action_mask[act] and 0 <= act < COLUMNS
+
+        return act
 
 
 class NeuralAgent(Agent):
