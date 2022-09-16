@@ -27,9 +27,9 @@ class GameState(NamedTuple):
         return cls(
             player_board=np.zeros((COLUMNS, ROWS, DICEp1), dtype=np.uint8),
             opponent_board=np.zeros((COLUMNS, ROWS, DICEp1), dtype=np.uint8),
-            player_col_scores=np.zeros(COLUMNS, dtype=np.uint8),
-            opponent_col_scores=np.zeros(COLUMNS, dtype=np.uint8),
-            action_mask=np.zeros(COLUMNS, dtype=np.bool_),
+            player_col_scores=np.zeros(COLUMNS, dtype=int),
+            opponent_col_scores=np.zeros(COLUMNS, dtype=int),
+            action_mask=np.zeros(COLUMNS, dtype=bool),
             dice=np.zeros(DICEp1, dtype=np.uint8)
         )
 
@@ -84,10 +84,10 @@ class Board:
             val, count = np.unique(column, return_counts=True)
             multiplier = count * count
             partial_sums.append(
-                np.sum(val * multiplier, dtype=np.uint8)
+                np.sum(val * multiplier, dtype=np.int32)
             )
 
-        return np.sum(partial_sums, dtype=np.uint8), partial_sums
+        return np.sum(partial_sums, dtype=np.int32), partial_sums
 
     @property
     def possible_actions(self):

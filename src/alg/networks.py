@@ -25,43 +25,44 @@ def ln_factory():
 _ACTIVATION = dict(
     relu=jax.nn.relu,
     elu=jax.nn.elu,
-    gelu=jax.nn.gelu
+    gelu=jax.nn.gelu,
+    swish=jax.nn.swish
 )
 
 
 class TransformerLayer(hk.Module):
     def __init__(
             self,
-            hidden_dim: int,
+            attention_dim: int,
             num_heads: int,
             activation: str
     ):
         super().__init__()
-        self._hidden_dim = hidden_dim
+        self._attention_dim = attention_dim
         self._num_heads = num_heads
         self._activation = activation
 
-    def __call__(self, x, mask=None):
-        att = self._attention_path(x, mask)
+    def __call__(self, x):
+        input_dim = x.shape[-1]
+        att = self._attention_path(x, input_dim)
         x = ln_factory()(x + att)
-        dense = self._dense_path(x)
+        dense = self._dense_path(x, input_dim)
 
         return ln_factory()(x + dense)
 
-    def _attention_path(self, x, mask):
-        x = hk.Linear(3 * self._hidden_dim)(x)
+    def _attention_path(self, x, output_dim):
+        x = hk.Linear(3 * self._attention_dim)(x)
         qkv = jnp.split(x, 3, axis=-1)
         att = hk.MultiHeadAttention(
             self._num_heads,
-            self._hidden_dim,
-            w_init_scale=3.
-        )(*qkv, mask=mask)
+            self._attention_dim,
+            w_init_scale=2.
+        )(*qkv)
+        return hk.Linear(output_dim)(att)
 
-        return hk.Linear(self._hidden_dim)(att)
-
-    def _dense_path(self, x):
+    def _dense_path(self, x, output_dim):
         return hk.nets.MLP(
-            2 * [self._hidden_dim],
+            2 * [output_dim],
             w_init=hk.initializers.VarianceScaling(),
             b_init=jnp.zeros,
             activation=_ACTIVATION[self._activation],
@@ -72,26 +73,27 @@ class Transformer(hk.Module):
     def __init__(
             self,
             hidden_dim: int,
+            attention_dim: int,
             num_heads: int,
             num_layers: int,
             activation: str
     ):
         super().__init__()
         self._hidden_dim = hidden_dim
+        self._attention_dim = attention_dim
         self._num_heads = num_heads
         self._num_layers = num_layers
         self._activation = activation
 
-    def __call__(self, x, mask=None):
+    def __call__(self, x):
         x = hk.Linear(self._hidden_dim)(x)
-        x = ln_factory()(x)
 
         for _ in range(self._num_layers):
             x = TransformerLayer(
-                self._hidden_dim,
+                self._attention_dim,
                 self._num_heads,
                 self._activation
-            )(x, mask)
+            )(x)
 
         return x
 
@@ -100,6 +102,7 @@ class BoardEncoder(hk.Module):
     def __init__(
             self,
             hidden_dim: int,
+            attention_dim: int,
             row_encoder_layer: int,
             row_num_heads: int,
             col_encoder_layer: int,
@@ -111,12 +114,14 @@ class BoardEncoder(hk.Module):
         self._board_emb_dim = board_emb_dim
         self._row_encoder = Transformer(
             hidden_dim,
+            attention_dim,
             row_num_heads,
             row_encoder_layer,
             activation
         )
         self._col_encoder = Transformer(
             hidden_dim,
+            attention_dim,
             col_num_heads,
             col_encoder_layer,
             activation
@@ -131,7 +136,8 @@ class BoardEncoder(hk.Module):
         board = self._col_encoder(board)
         board = jnp.reshape(board, prefix_shape + [-1])
 
-        return hk.Linear(self._board_emb_dim)(board)
+        board = hk.Linear(self._board_emb_dim)(board)
+        return ln_factory()(board)
         
         
 class Actor(hk.Module):
@@ -186,9 +192,10 @@ def make_networks(cfg: Config):
 
     @hk.without_apply_rng
     @hk.transform
-    def _forward(state):
+    def forward(state):
         encoder = BoardEncoder(
             cfg.hidden_dim,
+            cfg.attention_dim,
             cfg.row_encoder_layers,
             cfg.row_num_heads,
             cfg.col_encoder_layers,
@@ -213,7 +220,7 @@ def make_networks(cfg: Config):
         return tfd.Categorical(logits)
 
     return Networks(
-        init=lambda key: _forward.init(key, dummy_state),
-        actor=_forward.apply,
+        init=lambda key: forward.init(key, dummy_state),
+        actor=forward.apply,
         make_dist=make_dist
     )

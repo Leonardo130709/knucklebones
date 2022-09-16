@@ -12,9 +12,7 @@ from src.consts import COLUMNS
 class Agent(abc.ABC):
 
     @abc.abstractmethod
-    def __call__(self,
-            state: GameState,
-            ) -> int:
+    def __call__(self, state: GameState) -> int:
         """Observe boards and dice and take action."""
 
 

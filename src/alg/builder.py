@@ -27,19 +27,20 @@ class Builder:
         rng = jax.random.PRNGKey(self.cfg.seed)
         self.actor_rng, self.learner_rng = jax.random.split(rng)
         self._actors_shared_values = MultiprocessValues(
-            mp.Value('i', 0), mp.Value('i', 0), mp.Value('i', 0)
+            mp.Value("i", 0), mp.Value("i", 0), mp.Value("i", 0)
         )
 
     def make_actor(self):
         networks = make_networks(self.cfg)
-        client = reverb.Client(f'localhost:{self.cfg.port}')
+        client = reverb.Client(f"localhost:{self.cfg.port}")
         self.actor_rng, rng = jax.random.split(self.actor_rng)
-        return Actor(rng,
-                     self.cfg,
-                     networks,
-                     client,
-                     self._actors_shared_values
-                     )
+        return Actor(
+            rng,
+            self.cfg,
+            networks,
+            client,
+            self._actors_shared_values
+        )
 
     def make_server(self):
         networks = make_networks(self.cfg)
@@ -67,13 +68,31 @@ class Builder:
                 rate_limiter=reverb.rate_limiters.MinSize(1),
                 signature=params_signature
             ),
-            reverb.Table.queue(
+            reverb.Table(
                 name="replay_buffer",
                 max_size=self.cfg.buffer_size,
+                sampler=reverb.selectors.Uniform(),
+                remover=reverb.selectors.Fifo(),
+                max_times_sampled=2,
+                # rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
+                #     samples_per_insert=1.,
+                #     min_size_to_sample=self.cfg.batch_size,
+                #     error_buffer=.1 * self.cfg.batch_size,
+                # ),
+                rate_limiter=reverb.rate_limiters.MinSize(self.cfg.batch_size),
                 signature=trajectory_signature
-            )
+            ),
+            # reverb.Table.queue(
+            #     name="replay_buffer",
+            #     max_size=self.cfg.buffer_size,
+            #     signature=trajectory_signature
+            # )
         ]
-        return reverb.Server(tables, self.cfg.port)
+        server = reverb.Server(tables, self.cfg.port)
+        client = reverb.Client(f"localhost:{self.cfg.port}")
+        client.insert(params, priorities={"weights": 1.})
+
+        return server
 
     def make_dataset_iterator(self):
         ds = reverb.TrajectoryDataset.from_table_signature(
@@ -82,13 +101,12 @@ class Builder:
             max_in_flight_samples_per_worker=2*self.cfg.batch_size
         )
         ds = ds.batch(self.cfg.batch_size, drop_remainder=True)
+        ds = ds.prefetch(5)
         return ds.as_numpy_iterator()
 
     def make_learner(self):
         networks = make_networks(self.cfg)
-        params = networks.init(jax.random.PRNGKey(0))
-        client = reverb.Client(f'localhost:{self.cfg.port}')
-        client.insert(params, priorities={"weights": 1.})
+        client = reverb.Client(f"localhost:{self.cfg.port}")
         ds = self.make_dataset_iterator()
 
         optim = optax.chain(
@@ -96,9 +114,11 @@ class Builder:
             optax.adam(self.cfg.learning_rate)
         )
         self.learner_rng, rng = jax.random.split(self.learner_rng)
-        return Learner(rng,
-                       self.cfg,
-                       networks,
-                       optim,
-                       ds,
-                       client)
+        return Learner(
+            rng,
+            self.cfg,
+            networks,
+            optim,
+            ds,
+            client
+        )

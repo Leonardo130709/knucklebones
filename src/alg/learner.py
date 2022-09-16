@@ -41,7 +41,7 @@ class Learner:
         with open(f"{config.logdir}/config.pickle", "wb") as cfg_f:
             pickle.dump(config, cfg_f)
 
-        @chex.assert_max_traces(n=3)
+        @chex.assert_max_traces(n=2)
         def _step(learner_state, data):
             params, optim_state = learner_state
             states, actions, scores = map(
@@ -49,15 +49,15 @@ class Learner:
                 ("states", "actions", "scores")
             )
             
-            def loss(actor_params, states, actions, advantages):
+            def loss(actor_params, states, actions, scores):
                 logits = networks.actor(actor_params, states)
                 dist = networks.make_dist(logits)
                 log_probs = dist.log_prob(actions)
 
                 entropy = dist.entropy()
-                chex.assert_equal_shape([log_probs, advantages, entropy])
+                chex.assert_equal_shape([log_probs, scores, entropy])
 
-                cross_entropy_loss = - jnp.mean(advantages * log_probs)
+                cross_entropy_loss = - jnp.mean(scores * log_probs)
                 entropy_gain = jnp.mean(entropy)
 
                 loss =\

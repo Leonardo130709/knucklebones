@@ -3,6 +3,9 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
 
+import warnings
+warnings.filterwarnings('ignore')
+
 
 import multiprocessing
 import reverb
@@ -28,8 +31,6 @@ def make_learner(builder):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
-    import warnings
-    warnings.filterwarnings('ignore')
 
     config = Config()
     builder = Builder(config)
