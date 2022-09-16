@@ -7,29 +7,31 @@ from rltools.config import Config as BaseConfig
 class Config(BaseConfig):
     # alg
     discount: float = 1.
-    entropy_coef: float = 1e-4
+    entropy_coef: float = 1e-3
+    kl_coef: float = 1e-2
 
     # architecture
-    hidden_dim: int = 64
-    attention_dim: int = 16
-    row_encoder_layers: int = 2
-    row_num_heads: int = 1
-    col_encoder_layers: int = 2
-    col_num_heads: int = 1
     board_emb_dim: int = 16
-    actor_layers: int = 3
+    attention_dim: int = 16
+    row_encoder_layers: int = 1
+    row_num_heads: int = 1
+    col_encoder_layers: int = 1
+    col_num_heads: int = 1
+    actor_layers: int = 2
+    actor_hidden_dims: int = 64
     activation: str = "swish"
 
     # train
-    learning_rate: float = 1e-3
-    batch_size: int = 512
-    buffer_size: int = 4096
+    learning_rate: float = 1e-5
+    batch_size: int = 1024
+    buffer_size: int = 2048
+    target_polyak: float = 5e-3
     max_grad: float = 10.
-    eval_steps: int = 10000
-    eval_games: int = 300
+    eval_steps: int = 5000
+    eval_games: int = 500
 
-    num_actors: int = 5
+    num_actors: int = 32
     seed: int = 0
     port: int = 41922
-    logdir: str = "logdir/lesser_sampler"
+    logdir: str = "logdir/kl_div"
 

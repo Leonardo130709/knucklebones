@@ -15,10 +15,11 @@ from .learner import Learner
 from src.game import GameState
 
 
-class MultiprocessValues(NamedTuple):
+class MPValues(NamedTuple):
     num_actors: mp.Value
     completed_games: mp.Value
     total_steps: mp.Value
+    gradient_steps: mp.Value
 
 
 class Builder:
@@ -26,9 +27,7 @@ class Builder:
         self.cfg = config
         rng = jax.random.PRNGKey(self.cfg.seed)
         self.actor_rng, self.learner_rng = jax.random.split(rng)
-        self._actors_shared_values = MultiprocessValues(
-            mp.Value("i", 0), mp.Value("i", 0), mp.Value("i", 0)
-        )
+        self._shared_values = MPValues(*[mp.Value("i", 0) for _ in range(4)])
 
     def make_actor(self):
         networks = make_networks(self.cfg)
@@ -39,7 +38,7 @@ class Builder:
             self.cfg,
             networks,
             client,
-            self._actors_shared_values
+            self._shared_values
         )
 
     def make_server(self):
@@ -68,25 +67,11 @@ class Builder:
                 rate_limiter=reverb.rate_limiters.MinSize(1),
                 signature=params_signature
             ),
-            reverb.Table(
+            reverb.Table.queue(
                 name="replay_buffer",
                 max_size=self.cfg.buffer_size,
-                sampler=reverb.selectors.Uniform(),
-                remover=reverb.selectors.Fifo(),
-                max_times_sampled=2,
-                # rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-                #     samples_per_insert=1.,
-                #     min_size_to_sample=self.cfg.batch_size,
-                #     error_buffer=.1 * self.cfg.batch_size,
-                # ),
-                rate_limiter=reverb.rate_limiters.MinSize(self.cfg.batch_size),
                 signature=trajectory_signature
-            ),
-            # reverb.Table.queue(
-            #     name="replay_buffer",
-            #     max_size=self.cfg.buffer_size,
-            #     signature=trajectory_signature
-            # )
+            )
         ]
         server = reverb.Server(tables, self.cfg.port)
         client = reverb.Client(f"localhost:{self.cfg.port}")
@@ -120,5 +105,6 @@ class Builder:
             networks,
             optim,
             ds,
-            client
+            client,
+            self._shared_values
         )

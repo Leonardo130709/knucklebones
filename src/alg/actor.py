@@ -21,7 +21,7 @@ class Actor:
                  config: Config,
                  networks: Networks,
                  client: reverb.Client,
-                 shared_values
+                 shared_values: "MPValues"
                  ):
         self._rng_seq = hk.PRNGSequence(rng_key)
         self._config = config
@@ -73,7 +73,7 @@ class Actor:
 
         self._env = Knucklebones(
             self._opponents["self_train"],
-            self._opponents["self_eval"]
+            self._opponents["self_train"]
         )
 
     def act(self, state: GameState, training: bool):
@@ -129,9 +129,6 @@ class Actor:
                 summary.get,
                 ("winner_states", "winner_actions", "length")
             )
-            self._shared.completed_games.value += 1
-            self._shared.total_steps.value += steps
-
             discounts = self._config.discount ** \
                         np.arange(len(actions) - 1, -1, -1)
             scores = discounts.astype(np.float32)
@@ -152,6 +149,9 @@ class Actor:
                         )
                     )
                     writer.flush(block_until_num_items=10)
+
+            self._shared.completed_games.value += 1
+            self._shared.total_steps.value += steps
 
             if self._shared.completed_games.value % self._config.eval_steps == 0:
                 self.evaluate()

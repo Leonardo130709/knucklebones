@@ -27,8 +27,8 @@ class GameState(NamedTuple):
         return cls(
             player_board=np.zeros((COLUMNS, ROWS, DICEp1), dtype=np.uint8),
             opponent_board=np.zeros((COLUMNS, ROWS, DICEp1), dtype=np.uint8),
-            player_col_scores=np.zeros(COLUMNS, dtype=int),
-            opponent_col_scores=np.zeros(COLUMNS, dtype=int),
+            player_col_scores=np.zeros(COLUMNS, dtype=np.int32),
+            opponent_col_scores=np.zeros(COLUMNS, dtype=np.int32),
             action_mask=np.zeros(COLUMNS, dtype=bool),
             dice=np.zeros(DICEp1, dtype=np.uint8)
         )

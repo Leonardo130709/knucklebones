@@ -7,7 +7,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-import multiprocessing
+import multiprocessing as mp
 import reverb
 
 from src.alg.builder import Builder
@@ -30,18 +30,19 @@ def make_learner(builder):
 
 
 if __name__ == "__main__":
-    multiprocessing.set_start_method("spawn")
+    mp.set_start_method("spawn")
 
     config = Config()
     builder = Builder(config)
     client = reverb.Client(f'localhost:{config.port}')
-    server = multiprocessing.Process(target=make_server, args=(builder,))
-    learner = multiprocessing.Process(target=make_learner, args=(builder,))
+    server = mp.Process(target=make_server, args=(builder,))
+    learner = mp.Process(target=make_learner, args=(builder,))
     server.start()
     learner.start()
     actors = []
-    for i in range(config.num_actors):
-        actor = multiprocessing.Process(target=make_actor, args=(builder,))
+    num_actors = min(config.num_actors, mp.cpu_count())
+    for i in range(num_actors):
+        actor = mp.Process(target=make_actor, args=(builder,))
         actor.start()
         actors.append(actor)
     for actor in actors:

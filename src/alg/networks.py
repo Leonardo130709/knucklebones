@@ -72,21 +72,21 @@ class TransformerLayer(hk.Module):
 class Transformer(hk.Module):
     def __init__(
             self,
-            hidden_dim: int,
+            feedforward_dim: int,
             attention_dim: int,
             num_heads: int,
             num_layers: int,
             activation: str
     ):
         super().__init__()
-        self._hidden_dim = hidden_dim
+        self._feedforward_dim = feedforward_dim
         self._attention_dim = attention_dim
         self._num_heads = num_heads
         self._num_layers = num_layers
         self._activation = activation
 
     def __call__(self, x):
-        x = hk.Linear(self._hidden_dim)(x)
+        x = hk.Linear(self._feedforward_dim)(x)
 
         for _ in range(self._num_layers):
             x = TransformerLayer(
@@ -101,26 +101,25 @@ class Transformer(hk.Module):
 class BoardEncoder(hk.Module):
     def __init__(
             self,
-            hidden_dim: int,
+            feedforward_dim: int,
             attention_dim: int,
             row_encoder_layer: int,
             row_num_heads: int,
             col_encoder_layer: int,
             col_num_heads: int,
-            board_emb_dim: int,
             activation: str
     ):
         super().__init__()
-        self._board_emb_dim = board_emb_dim
+        self._feedforward_dim = feedforward_dim
         self._row_encoder = Transformer(
-            hidden_dim,
+            feedforward_dim,
             attention_dim,
             row_num_heads,
             row_encoder_layer,
             activation
         )
         self._col_encoder = Transformer(
-            hidden_dim,
+            feedforward_dim,
             attention_dim,
             col_num_heads,
             col_encoder_layer,
@@ -136,7 +135,7 @@ class BoardEncoder(hk.Module):
         board = self._col_encoder(board)
         board = jnp.reshape(board, prefix_shape + [-1])
 
-        board = hk.Linear(self._board_emb_dim)(board)
+        board = hk.Linear(self._feedforward_dim)(board)
         return ln_factory()(board)
         
         
@@ -194,13 +193,12 @@ def make_networks(cfg: Config):
     @hk.transform
     def forward(state):
         encoder = BoardEncoder(
-            cfg.hidden_dim,
+            cfg.board_emb_dim,
             cfg.attention_dim,
             cfg.row_encoder_layers,
             cfg.row_num_heads,
             cfg.col_encoder_layers,
             cfg.col_num_heads,
-            cfg.board_emb_dim,
             cfg.activation
         )
         state = state._replace(
@@ -211,7 +209,7 @@ def make_networks(cfg: Config):
         )
         return Actor(
             COLUMNS,
-            cfg.hidden_dim,
+            cfg.actor_hidden_dims,
             cfg.actor_layers,
             cfg.activation
         )(state)
