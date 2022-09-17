@@ -9,7 +9,7 @@ class Config(BaseConfig):
     discount: float = .9
     init_duals: float = .1
     epsilon_kl: float = .01
-    tv_constraint: float = 2.
+    tv_constraint: float = 3.
 
     # architecture
     board_emb_dim: int = 64
@@ -26,13 +26,13 @@ class Config(BaseConfig):
     # train
     actor_critic_lr: float = 1e-4
     dual_lr: float = 1e-2
-    batch_size: int = 2048
+    batch_size: int = 1024
     buffer_size: int = 4096
     target_polyak: float = 5e-3
-    num_sgd_steps: int = 3
+    num_sgd_steps: int = 5
     max_grad: float = 10.
-    eval_steps: int = 5000
-    eval_games: int = 300
+    eval_steps: int = 10000
+    eval_games: int = 500
 
     num_actors: int = 32
     seed: int = 0
