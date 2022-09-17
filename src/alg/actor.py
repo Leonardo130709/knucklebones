@@ -125,13 +125,23 @@ class Actor:
             self._update_params()
             self._rng_seq.reserve(15)
             summary = self._env.play()
-            states, actions, steps = map(
+            states, actions, steps, winner = map(
                 summary.get,
-                ("winner_states", "winner_actions", "length")
+                ("states_history", "actions_history", "length", "winner")
             )
-            discounts = self._config.discount ** \
-                        np.arange(len(actions) - 1, -1, -1)
-            scores = discounts.astype(np.float32)
+
+            def _discounts(num_steps):
+                return self._config.discount ** np.arange(
+                    num_steps - 1, -1, -1, dtype=np.float32)
+
+            winner = 2 * winner - 1.
+            scores = np.concatenate((
+                -winner * _discounts(len(actions[0])),
+                winner * _discounts(len(actions[1]))
+            ))
+
+            states = states[0] + states[1]
+            actions = actions[0] + actions[1]
 
             with self._client.trajectory_writer(num_keep_alive_refs=1) as writer:
                 for state, action, score in zip(states, actions, scores):

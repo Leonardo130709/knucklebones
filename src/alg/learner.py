@@ -52,7 +52,7 @@ class Learner:
                 ("states", "actions", "scores")
             )
             
-            def loss_fn(actor_params, target_params, states, actions, scores):
+            def actor_loss_fn(actor_params, target_params, states, actions, advantages):
                 logits = networks.actor(actor_params, states)
                 target_logits = networks.actor(target_params, states)
                 dist = networks.make_dist(logits)
@@ -61,23 +61,36 @@ class Learner:
                 kl_div = tfd.kl_divergence(dist, target_dist)
 
                 entropy = dist.entropy()
-                chex.assert_equal_shape([log_probs, scores, entropy, kl_div])
+                chex.assert_equal_shape([log_probs, advantages, entropy, kl_div])
 
-                cross_entropy = - jnp.mean(scores * log_probs)
-                entropy_gain = jnp.mean(entropy)
+                cross_entropy = - jnp.mean(advantages * log_probs)
+                entropy = jnp.mean(entropy)
                 kl_loss = jnp.mean(kl_div)
 
                 loss =\
                     cross_entropy \
-                    - config.entropy_coef * entropy_gain \
-                    + config.kl_coef * kl_loss
+                    + config.kl_coef * kl_loss \
+                    - config.entropy_coef * entropy
 
                 metrics = dict(
                     ce_loss=cross_entropy,
-                    entropy=entropy_gain,
+                    entropy=entropy,
                     kl_div=kl_loss
                 )
                 return loss, metrics
+
+            def critic_loss_fn(params, target_params, states, target_values):
+                values = networks.critic(params, states)
+                chex.assert_equal_shape([values, target_values])
+                loss = jnp.square(values - target_values)
+                return .5 * jnp.mean(loss), values
+
+            def loss_fn(params, target_params, states, actions, scores):
+                critic_loss, values = critic_loss_fn(params, target_params, states, scores)
+                advantages = jax.lax.stop_gradient(scores - values)
+                actor_loss, metrics = actor_loss_fn(params, target_params, states, actions, advantages)
+                metrics.update(critic_loss=critic_loss)
+                return critic_loss + actor_loss, metrics
 
             grads_fn = jax.grad(loss_fn, has_aux=True)
             grads, metrics = grads_fn(

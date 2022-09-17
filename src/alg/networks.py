@@ -1,4 +1,4 @@
-from typing import NamedTuple, Callable
+from typing import NamedTuple, Callable, Iterable
 
 import jax
 import jax.numpy as jnp
@@ -50,6 +50,7 @@ class TransformerLayer(hk.Module):
 
         return ln_factory()(x + dense)
 
+    @hk.transparent
     def _attention_path(self, x, output_dim):
         x = hk.Linear(3 * self._attention_dim)(x)
         qkv = jnp.split(x, 3, axis=-1)
@@ -60,6 +61,7 @@ class TransformerLayer(hk.Module):
         )(*qkv)
         return hk.Linear(output_dim)(att)
 
+    @hk.transparent
     def _dense_path(self, x, output_dim):
         return hk.nets.MLP(
             2 * [output_dim],
@@ -143,38 +145,26 @@ class Actor(hk.Module):
     def __init__(
             self,
             act_dim: int,
-            hidden_dim: int,
-            layers: int,
+            layers: Iterable[int],
             activation: str
     ):
         super().__init__()
         self.act_dim = act_dim
         self._layers = layers
-        self._hidden_dim = hidden_dim
         self._act = activation
 
     def __call__(self, state):
-        flatten_state = jnp.concatenate(
-            [
-                state.player_board,
-                state.opponent_board,
-                state.player_col_scores,
-                state.opponent_col_scores,
-                state.dice
-            ],
-            axis=-1
-        )
-        flatten_state = hk.nets.MLP(
-            self._layers * [self._hidden_dim],
+        state = hk.nets.MLP(
+            self._layers,
             w_init=hk.initializers.VarianceScaling(),
             activation=_ACTIVATION[self._act],
             activate_final=True
-        )(flatten_state)
+        )(state)
 
         logits = hk.Linear(
             self.act_dim,
             w_init=jnp.zeros
-        )(flatten_state)
+        )(state)
 
         return logits
 
@@ -182,6 +172,7 @@ class Actor(hk.Module):
 class Networks(NamedTuple):
     init: Callable
     actor: Callable
+    critic: Callable
     make_dist: Callable
 
 
@@ -190,8 +181,8 @@ def make_networks(cfg: Config):
     dummy_state = jax.tree_util.tree_map(jnp.float32, dummy_state)
 
     @hk.without_apply_rng
-    @hk.transform
-    def forward(state):
+    @hk.multi_transform
+    def forward():
         encoder = BoardEncoder(
             cfg.board_emb_dim,
             cfg.attention_dim,
@@ -201,24 +192,65 @@ def make_networks(cfg: Config):
             cfg.col_num_heads,
             cfg.activation
         )
-        state = state._replace(
-            player_board=encoder(state.player_board),
-            opponent_board=encoder(state.opponent_board),
-            player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
-            opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
-        )
-        return Actor(
+        actor = Actor(
             COLUMNS,
-            cfg.actor_hidden_dims,
             cfg.actor_layers,
             cfg.activation
-        )(state)
+        )
+        critic = hk.nets.MLP(
+            cfg.critic_layers + (1,),
+            w_init=hk.initializers.VarianceScaling(),
+            activation=_ACTIVATION[cfg.activation]
+        )
+
+        def encode_fn(state):
+            return state._replace(
+                player_board=encoder(state.player_board),
+                opponent_board=encoder(state.opponent_board),
+                player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
+                opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
+            )
+
+        def actor_fn(state):
+            state = encode_fn(state)
+            flatten_state = jnp.concatenate(
+                [
+                    state.player_board,
+                    state.opponent_board,
+                    state.player_col_scores,
+                    state.opponent_col_scores,
+                    state.dice
+                ],
+                axis=-1
+            )
+            return actor(flatten_state)
+
+        def critic_fn(state):
+            state = encode_fn(state)
+            flatten_state = jnp.concatenate(
+                [
+                    state.player_board,
+                    state.opponent_board,
+                    state.player_col_scores,
+                    state.opponent_col_scores,
+                ],
+                axis=-1
+            )
+            value = critic(flatten_state)
+            return jnp.squeeze(value, axis=-1)
+
+        def init():
+            return actor_fn(dummy_state), critic_fn(dummy_state)
+
+        return init, (actor_fn, critic_fn)
 
     def make_dist(logits):
         return tfd.Categorical(logits)
 
+    actor_fn, critic_fn = forward.apply
     return Networks(
-        init=lambda key: forward.init(key, dummy_state),
-        actor=forward.apply,
+        init=forward.init,
+        actor=actor_fn,
+        critic=critic_fn,
         make_dist=make_dist
     )
