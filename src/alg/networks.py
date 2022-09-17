@@ -183,6 +183,15 @@ def make_networks(cfg: Config):
     @hk.without_apply_rng
     @hk.multi_transform
     def forward():
+        encoder = BoardEncoder(
+            cfg.board_emb_dim,
+            cfg.attention_dim,
+            cfg.row_encoder_layers,
+            cfg.row_num_heads,
+            cfg.col_encoder_layers,
+            cfg.col_num_heads,
+            cfg.activation
+        )
         actor = Actor(
             COLUMNS,
             cfg.actor_layers,
@@ -191,19 +200,11 @@ def make_networks(cfg: Config):
         critic = hk.nets.MLP(
             cfg.critic_layers + (1,),
             w_init=hk.initializers.VarianceScaling(),
-            activation=_ACTIVATION[cfg.activation]
+            activation=_ACTIVATION[cfg.activation],
+            name="critic"
         )
 
         def encode_fn(state):
-            encoder = BoardEncoder(
-                cfg.board_emb_dim,
-                cfg.attention_dim,
-                cfg.row_encoder_layers,
-                cfg.row_num_heads,
-                cfg.col_encoder_layers,
-                cfg.col_num_heads,
-                cfg.activation
-            )
             return jnp.concatenate([
                 encoder(state.player_board),
                 encoder(state.opponent_board),

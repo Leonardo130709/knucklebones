@@ -8,7 +8,6 @@ import haiku as hk
 import optax
 import reverb
 import chex
-import tensorflow_probability.substrates.jax.distributions as tfd
 
 from rltools.loggers import TFSummaryLogger
 from .networks import Networks
