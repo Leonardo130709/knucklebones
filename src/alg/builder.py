@@ -93,17 +93,11 @@ class Builder:
         networks = make_networks(self.cfg)
         client = reverb.Client(f"localhost:{self.cfg.port}")
         ds = self.make_dataset_iterator()
-
-        optim = optax.chain(
-            optax.clip_by_global_norm(self.cfg.max_grad),
-            optax.adam(self.cfg.learning_rate)
-        )
         self.learner_rng, rng = jax.random.split(self.learner_rng)
         return Learner(
             rng,
             self.cfg,
             networks,
-            optim,
             ds,
             client,
             self._shared_values

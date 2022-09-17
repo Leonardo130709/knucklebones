@@ -183,15 +183,6 @@ def make_networks(cfg: Config):
     @hk.without_apply_rng
     @hk.multi_transform
     def forward():
-        encoder = BoardEncoder(
-            cfg.board_emb_dim,
-            cfg.attention_dim,
-            cfg.row_encoder_layers,
-            cfg.row_num_heads,
-            cfg.col_encoder_layers,
-            cfg.col_num_heads,
-            cfg.activation
-        )
         actor = Actor(
             COLUMNS,
             cfg.actor_layers,
@@ -204,39 +195,30 @@ def make_networks(cfg: Config):
         )
 
         def encode_fn(state):
-            return state._replace(
-                player_board=encoder(state.player_board),
-                opponent_board=encoder(state.opponent_board),
-                player_col_scores=state.player_col_scores / MAX_COLUMN_SCORE,
-                opponent_col_scores=state.opponent_col_scores / MAX_COLUMN_SCORE
+            encoder = BoardEncoder(
+                cfg.board_emb_dim,
+                cfg.attention_dim,
+                cfg.row_encoder_layers,
+                cfg.row_num_heads,
+                cfg.col_encoder_layers,
+                cfg.col_num_heads,
+                cfg.activation
             )
+            return jnp.concatenate([
+                encoder(state.player_board),
+                encoder(state.opponent_board),
+                state.player_col_scores / MAX_COLUMN_SCORE,
+                state.opponent_col_scores / MAX_COLUMN_SCORE,
+                state.dice
+            ], axis=-1)
 
         def actor_fn(state):
             state = encode_fn(state)
-            flatten_state = jnp.concatenate(
-                [
-                    state.player_board,
-                    state.opponent_board,
-                    state.player_col_scores,
-                    state.opponent_col_scores,
-                    state.dice
-                ],
-                axis=-1
-            )
-            return actor(flatten_state)
+            return actor(state)
 
         def critic_fn(state):
             state = encode_fn(state)
-            flatten_state = jnp.concatenate(
-                [
-                    state.player_board,
-                    state.opponent_board,
-                    state.player_col_scores,
-                    state.opponent_col_scores,
-                ],
-                axis=-1
-            )
-            value = critic(flatten_state)
+            value = critic(state)
             return jnp.squeeze(value, axis=-1)
 
         def init():
