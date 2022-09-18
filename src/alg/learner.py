@@ -8,6 +8,7 @@ import haiku as hk
 import optax
 import reverb
 import chex
+import tensorflow_probability.substrates.jax.distributions as tfd
 
 from rltools.loggers import TFSummaryLogger
 from .networks import Networks
@@ -72,34 +73,39 @@ class Learner:
                 ("states", "actions", "scores")
             )
 
-            def actor_loss_fn(actor_params, states, actions, weights):
+            def actor_loss_fn(
+                    actor_params, target_params, states, actions, weights):
                 logits = networks.actor(actor_params, states)
                 dist = networks.make_dist(logits)
+                target_logits = networks.actor(target_params, states)
+                target_dist = networks.make_dist(target_logits)
                 log_probs = dist.log_prob(actions)
+                kl_div = tfd.kl_divergence(dist, target_dist)
+                entropy = dist.entropy()
 
-                entropy = jnp.mean(dist.entropy())
-                chex.assert_equal_shape([log_probs, weights])
+                chex.assert_equal_shape([log_probs, weights, entropy, kl_div])
+                entropy = jnp.mean(entropy)
+                kl_div = jnp.mean(kl_div)
 
                 cross_entropy = - jnp.sum(weights * log_probs)
 
                 metrics = dict(
                     ce_loss=cross_entropy,
                     entropy=entropy,
+                    kl_div=kl_div
                 )
                 return cross_entropy, metrics
 
-            def critic_loss_fn(critic_params, states, target_values):
+            def critic_loss_fn(
+                    critic_params, states, scores):
                 values = networks.critic(critic_params, states)
-                chex.assert_equal_shape([values, target_values])
-                loss = jnp.square(values - target_values)
-                return .5 * jnp.mean(loss), values
+                chex.assert_equal_shape([values, scores])
+                advantages = scores - values
+                loss = jnp.square(advantages)
+                return .5 * jnp.mean(loss), jax.lax.stop_gradient(advantages)
 
             def dual_loss_fn(temperature, advantages):
-                tempered_adv = jnp.clip(
-                    advantages / temperature,
-                    a_min=-config.tv_constraint,
-                    a_max=config.tv_constraint
-                )
+                tempered_adv = advantages / temperature
                 normalized_weights = jax.nn.softmax(tempered_adv, axis=0)
                 normalized_weights = jax.lax.stop_gradient(normalized_weights)
 
@@ -111,20 +117,18 @@ class Learner:
                 return loss, normalized_weights
 
             def loss_fn(params, dual_params, target_params, states, actions, scores):
-                critic_loss, values = critic_loss_fn(
-                    params, states, scores)
-                advantages = jax.lax.stop_gradient(scores - values)
+                critic_loss, adv = critic_loss_fn(
+                    params, target_params, states, scores)
                 eta = jax.nn.softplus(dual_params)
                 dual_loss, normalized_weights = dual_loss_fn(
-                    eta, advantages)
+                    eta, adv)
                 actor_loss, metrics = actor_loss_fn(
-                    params, states, actions, normalized_weights
+                    params, target_params, states, actions, normalized_weights
                 )
                 metrics.update(
                     critic_loss=critic_loss,
                     dual_loss=dual_loss,
                     temperature=eta,
-                    mean_value=jnp.mean(values)
                 )
                 return critic_loss + actor_loss + dual_loss, metrics
 

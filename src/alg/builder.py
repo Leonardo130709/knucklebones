@@ -67,6 +67,19 @@ class Builder:
                 rate_limiter=reverb.rate_limiters.MinSize(1),
                 signature=params_signature
             ),
+            # reverb.Table(
+            #     name="replay_buffer",
+            #     sampler=reverb.selectors.Uniform(),
+            #     remover=reverb.selectors.Fifo(),
+            #     max_times_sampled=2,
+            #     max_size=self.cfg.buffer_size,
+            #     rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
+            #         2.,
+            #         self.cfg.batch_size,
+            #         .1 * self.cfg.batch_size
+            #     ),
+            #     signature=trajectory_signature
+            # ),
             reverb.Table.queue(
                 name="replay_buffer",
                 max_size=self.cfg.buffer_size,
