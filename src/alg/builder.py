@@ -67,19 +67,6 @@ class Builder:
                 rate_limiter=reverb.rate_limiters.MinSize(1),
                 signature=params_signature
             ),
-            # reverb.Table(
-            #     name="replay_buffer",
-            #     sampler=reverb.selectors.Uniform(),
-            #     remover=reverb.selectors.Fifo(),
-            #     max_times_sampled=2,
-            #     max_size=self.cfg.buffer_size,
-            #     rate_limiter=reverb.rate_limiters.SampleToInsertRatio(
-            #         2.,
-            #         self.cfg.batch_size,
-            #         .1 * self.cfg.batch_size
-            #     ),
-            #     signature=trajectory_signature
-            # ),
             reverb.Table.queue(
                 name="replay_buffer",
                 max_size=self.cfg.buffer_size,
@@ -98,8 +85,7 @@ class Builder:
             table="replay_buffer",
             max_in_flight_samples_per_worker=2*self.cfg.batch_size
         )
-        ds = ds.batch(self.cfg.batch_size, drop_remainder=True)
-        ds = ds.prefetch(5)
+        ds = ds.batch(self.cfg.buffer_size, drop_remainder=True)
         return ds.as_numpy_iterator()
 
     def make_learner(self):

@@ -8,7 +8,6 @@ import haiku as hk
 import optax
 import reverb
 import chex
-import tensorflow_probability.substrates.jax.distributions as tfd
 
 from rltools.loggers import TFSummaryLogger
 from .networks import Networks
@@ -18,9 +17,11 @@ from .config import Config
 class LearnerState(NamedTuple):
     params: Any
     target_params: Any
-    dual_params: Any
     optim_state: Any
-    dual_optim_state: Any
+
+    ema_state: Any
+    rng_key: jax.random.PRNGKey
+    step: int
 
 
 class Learner:
@@ -32,27 +33,34 @@ class Learner:
                  client: reverb.Client,
                  shared_valued: "MPValues"
                  ):
-        params = networks.init(rng_key)
-        init_dual = jnp.log(jnp.exp(config.init_duals) - 1.)
-        temperature = jnp.full((), init_dual, jnp.float32)
-        print("Learnable params: ",
-              hk.data_structures.tree_size((params, temperature))
-              )
+
+        rng_key, k1, k2 = jax.random.split(rng_key, 3)
+        params = networks.init(k1)
+        print("Learnable params: ", hk.data_structures.tree_size(params))
+
+        @hk.without_apply_rng
+        @hk.transform_with_state
+        def normalization_fn(x):
+            mean = jnp.mean(x)
+            std = jnp.std(x)
+            mean, std = hk.ExponentialMovingAverage(
+                config.normalization_tau)((mean, std))
+            return (x - mean) / jnp.fmax(1e-5, std)
+
+        _, ema_state = normalization_fn.init(k2, 0)
 
         optim = optax.chain(
             optax.clip_by_global_norm(config.max_grad),
             optax.adam(learning_rate=config.actor_critic_lr)
         )
-        dual_optim = optax.adam(config.dual_lr)
         optim_state = optim.init(params)
-        dual_optim_state = dual_optim.init(temperature)
-
         self._state = LearnerState(
             params=params,
             target_params=params,
-            dual_params=temperature,
             optim_state=optim_state,
-            dual_optim_state=dual_optim_state
+            ema_state=ema_state,
+            rng_key=rng_key,
+            step=0
         )
         self._config = config
         self._ds = dataset
@@ -64,102 +72,97 @@ class Learner:
         with open(f"{config.logdir}/config.pickle", "wb") as cfg_f:
             pickle.dump(config, cfg_f)
 
+        def ppo_loss(
+                params,
+                states,
+                actions,
+                target_values,
+                behaviour_advantages,
+                behaviour_log_probs
+        ):
+            logits = networks.actor(params, states)
+            dist = networks.make_dist(logits)
+            log_probs = dist.log_prob(actions)
+            entropy = dist.entropy()
+
+            chex.assert_equal_shape(
+                [log_probs, behaviour_log_probs,
+                 behaviour_advantages, entropy]
+            )
+            entropy = jnp.mean(entropy)
+
+            rhos = jnp.exp(log_probs - behaviour_log_probs)
+            clipped_rhos = jnp.clip(
+                    rhos,
+                    1 - config.ppo_clipping_epsilon,
+                    1 + config.ppo_clipping_epsilon
+                )
+            clipped_values = jnp.fmin(
+                rhos * behaviour_advantages,
+                clipped_rhos * behaviour_advantages
+            )
+            ppo_loss = - jnp.mean(clipped_values)
+            policy_loss = ppo_loss + config.entropy_coef * entropy
+
+            values = networks.critic(params, states)
+            chex.assert_equal_shape([values, target_values])
+            critic_loss = jnp.square(target_values - values)
+            critic_loss = .5 * jnp.mean(critic_loss)
+
+            total_loss = policy_loss + config.critic_coef * critic_loss
+
+            return total_loss, {
+                "ppo_loss": ppo_loss,
+                "entropy": entropy,
+                "critic_loss": critic_loss
+            }
+
         @chex.assert_max_traces(n=2)
-        def _step(learner_state: LearnerState, data):
-            params, target_params, dual_params, \
-                optim_state, dual_optim_state = learner_state
-            states, actions, scores = map(
+        def _step(learner_state, data):
+            params, target_params, optim_state, \
+            ema_state, rng_key, step = learner_state
+            states, actions, returns = map(
                 data.get,
                 ("states", "actions", "scores")
             )
 
-            def actor_loss_fn(
-                    actor_params, target_params, states, actions, weights):
-                logits = networks.actor(actor_params, states)
-                dist = networks.make_dist(logits)
-                target_logits = networks.actor(target_params, states)
-                target_dist = networks.make_dist(target_logits)
-                log_probs = dist.log_prob(actions)
-                kl_div = tfd.kl_divergence(dist, target_dist)
-                entropy = dist.entropy()
+            target_values = networks.critic(target_params, states)
+            target_logits = networks.actor(target_params, states)
+            target_dist = networks.make_dist(target_logits)
+            target_log_probs = target_dist.log_prob(actions)
+            advantages = returns - target_values
+            normalized_advantages, ema_state = normalization_fn.apply(
+                {}, ema_state, advantages)
 
-                chex.assert_equal_shape([log_probs, weights, entropy, kl_div])
-                entropy = jnp.mean(entropy)
-                kl_div = jnp.mean(kl_div)
+            grad_fn = jax.grad(ppo_loss, has_aux=True)
 
-                cross_entropy = - jnp.sum(weights * log_probs)
+            grads, metrics = grad_fn(
+                params, states, actions, returns,
+                normalized_advantages, target_log_probs
+            )
 
-                metrics = dict(
-                    ce_loss=cross_entropy,
-                    entropy=entropy,
-                    kl_div=kl_div
-                )
-                return cross_entropy, metrics
-
-            def critic_loss_fn(
-                    critic_params, states, scores):
-                values = networks.critic(critic_params, states)
-                chex.assert_equal_shape([values, scores])
-                advantages = scores - values
-                loss = jnp.square(advantages)
-                return .5 * jnp.mean(loss), jax.lax.stop_gradient(advantages)
-
-            def dual_loss_fn(temperature, advantages):
-                tempered_adv = advantages / temperature
-                normalized_weights = jax.nn.softmax(tempered_adv, axis=0)
-                normalized_weights = jax.lax.stop_gradient(normalized_weights)
-
-                log_batch_size = jnp.log(advantages.shape[0])
-                adv_logsumexp = jax.scipy.special.logsumexp(
-                    tempered_adv, axis=0)
-                loss = config.epsilon_kl + adv_logsumexp - log_batch_size
-                loss = loss * temperature
-                return loss, normalized_weights
-
-            def loss_fn(params, dual_params, target_params, states, actions, scores):
-                critic_loss, adv = critic_loss_fn(
-                    params, target_params, states, scores)
-                eta = jax.nn.softplus(dual_params)
-                dual_loss, normalized_weights = dual_loss_fn(
-                    eta, adv)
-                actor_loss, metrics = actor_loss_fn(
-                    params, target_params, states, actions, normalized_weights
-                )
-                metrics.update(
-                    critic_loss=critic_loss,
-                    dual_loss=dual_loss,
-                    temperature=eta,
-                )
-                return critic_loss + actor_loss + dual_loss, metrics
-
-            grads_fn = jax.grad(loss_fn, argnums=(0, 1), has_aux=True)
-            (params_grads, dual_params_grads), metrics = grads_fn(
-                params, dual_params, target_params, states, actions, scores)
-
-            params_updates, optim_state = optim.update(
-                params_grads, optim_state)
-            dual_updates, dual_optim_state = dual_optim.update(
-                dual_params_grads, dual_optim_state)
-            grad_norm = optax.global_norm(params_updates)
-
+            updates, optim_state = optim.update(
+                grads, optim_state)
+            grad_norm = optax.global_norm(updates)
             metrics.update(
                 grad_norm=grad_norm,
             )
-            params = optax.apply_updates(params, params_updates)
-            dual_params = optax.apply_updates(dual_params, dual_updates)
+            params = optax.apply_updates(params, updates)
 
-            target_params = optax.incremental_update(
+            target_params = optax.periodic_update(
                 params,
                 target_params,
-                config.target_polyak
+                step,
+                config.targets_update_every
             )
 
             return LearnerState(
                 params,
                 target_params,
-                dual_params,
                 optim_state,
-                dual_optim_state
+                ema_state,
+                rng_key,
+                step+1
             ), metrics
 
         self._step = jax.jit(_step, donate_argnums=())
